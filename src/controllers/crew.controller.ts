@@ -1,8 +1,15 @@
+import { randomBytes } from "crypto";
+import bcrypt from "bcrypt";
 import { Response } from "express";
-import { createCrew, findCrewByEmail, IdentityType } from "../models";
+import { createCrew, findAllCrew, findCrewByEmail, IdentityType } from "../models";
 import type { Crew } from "../models/crew.model";
+import { sendCrewWelcomeEmail } from "../services/email";
 
-type CrewCreatePayload = Omit<Crew, "id">;
+type CrewFormPayload = Omit<Crew, "id" | "password">;
+
+function generatePassword(): string {
+  return randomBytes(10).toString("base64").slice(0, 12);
+}
 
 const FLAT_FIELDS = [
   "firstname",
@@ -41,7 +48,7 @@ function getString(body: Record<string, unknown>, key: string): string | undefin
 function hasRequiredFormFields(
   body: Record<string, unknown>,
   files: { passport_document?: Express.Multer.File[]; identity_document?: Express.Multer.File[] }
-): { ok: true; data: CrewCreatePayload } | { ok: false; message: string } {
+): { ok: true; data: CrewFormPayload } | { ok: false; message: string } {
   for (const key of FLAT_FIELDS) {
     if (!getString(body, key)) {
       return { ok: false, message: `Missing or invalid field: ${key}` };
@@ -70,7 +77,7 @@ function hasRequiredFormFields(
     return { ok: false, message: "identity_document file is required" };
   }
 
-  const data: CrewCreatePayload = {
+  const data: CrewFormPayload = {
     firstname: getString(body, "firstname")!,
     lastname: getString(body, "lastname")!,
     dateOfBirth: getString(body, "dateOfBirth")!,
@@ -106,6 +113,17 @@ interface CrewFormFiles {
   identity_document?: Express.Multer.File[];
 }
 
+export async function getCrew(_req: import("express").Request, res: Response) {
+  try {
+    const crew = await findAllCrew();
+    return res.json({ crew });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching crew:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
 export async function postCrew(
   req: import("express").Request & { files?: CrewFormFiles },
   res: Response
@@ -124,7 +142,22 @@ export async function postCrew(
       return res.status(409).json({ message: "Crew with this email already exists." });
     }
 
-    const crew = await createCrew(result.data);
+    const plainPassword = generatePassword();
+    const hashedPassword = await bcrypt.hash(plainPassword, 10);
+    const dataWithPassword = { ...result.data, password: hashedPassword };
+
+    const crew = await createCrew(dataWithPassword);
+
+    try {
+      await sendCrewWelcomeEmail(result.data.email, result.data.firstname, plainPassword);
+    } catch (emailError) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to send welcome email:", emailError);
+      return res.status(201).json({
+        message: "Crew created successfully, but failed to send welcome email.",
+        crew,
+      });
+    }
 
     return res.status(201).json({
       message: "Crew created successfully.",

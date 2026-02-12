@@ -36,6 +36,7 @@ export interface Crew {
   city: string;
   country: string;
   postal_code: string;
+  password: string; // hashed
   passport: Passport;
   identity: Identity;
 }
@@ -81,6 +82,7 @@ const crewSchema = new Schema<CrewDocument>(
     city: { type: String, required: true },
     country: { type: String, required: true },
     postal_code: { type: String, required: true },
+    password: { type: String, required: true, select: false },
     passport: { type: passportSchema, required: true },
     identity: { type: identitySchema, required: true },
   },
@@ -90,7 +92,10 @@ const crewSchema = new Schema<CrewDocument>(
 const CrewModel: Model<CrewDocument> =
   mongoose.models.Crew ?? mongoose.model<CrewDocument>("Crew", crewSchema);
 
-function toCrew(doc: CrewDocument): Crew {
+/** Crew without password - safe for API responses */
+export type CrewPublic = Omit<Crew, "password">;
+
+function toCrew(doc: CrewDocument): CrewPublic {
   return {
     id: doc._id.toString(),
     firstname: doc.firstname,
@@ -110,18 +115,23 @@ function toCrew(doc: CrewDocument): Crew {
   };
 }
 
-export async function findCrewById(id: string): Promise<Crew | null> {
+export async function findCrewById(id: string): Promise<CrewPublic | null> {
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
   const doc = await CrewModel.findById(id);
   return doc ? toCrew(doc) : null;
 }
 
-export async function findCrewByEmail(email: string): Promise<Crew | null> {
+export async function findCrewByEmail(email: string): Promise<CrewPublic | null> {
   const doc = await CrewModel.findOne({ email: email.toLowerCase() });
   return doc ? toCrew(doc) : null;
 }
 
-export async function createCrew(data: Omit<Crew, "id">): Promise<Crew> {
+export async function findAllCrew(): Promise<CrewPublic[]> {
+  const docs = await CrewModel.find().sort({ createdAt: -1 });
+  return docs.map((doc) => toCrew(doc));
+}
+
+export async function createCrew(data: Omit<Crew, "id">): Promise<CrewPublic> {
   const doc = await CrewModel.create(data);
   return toCrew(doc);
 }
