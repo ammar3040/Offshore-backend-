@@ -7,7 +7,13 @@ import { connectDB } from "./dbconnection";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+const allowedOrigins = ["https://off-shore-frontend.vercel.app"];
+
+app.use(
+  cors({
+    origin: allowedOrigins,
+  })
+);
 app.use(express.json());
 
 app.get("/", (req: Request, res: Response) => {
