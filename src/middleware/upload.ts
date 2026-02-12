@@ -1,22 +1,6 @@
 import multer from "multer";
-import path from "path";
-import fs from "fs";
-import { randomUUID } from "crypto";
 
-const crewUploadDir = path.join(process.cwd(), "uploads", "crew");
-if (!fs.existsSync(crewUploadDir)) {
-  fs.mkdirSync(crewUploadDir, { recursive: true });
-}
-
-const crewStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    cb(null, crewUploadDir);
-  },
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname) || "";
-    cb(null, `${randomUUID()}${ext}`);
-  },
-});
+const crewStorage = multer.memoryStorage();
 
 export const crewUpload = multer({
   storage: crewStorage,
