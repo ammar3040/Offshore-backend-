@@ -1,15 +1,10 @@
-import { randomBytes } from "crypto";
 import bcrypt from "bcrypt";
 import { Response } from "express";
-import { createCrew, findAllCrew, findCrewByEmail, IdentityType } from "../models";
+import { createCrew, findAllCrew, findCrewByEmail, findCrewByEmailWithPassword, IdentityType } from "../models";
 import type { Crew } from "../models/crew.model";
-import { sendCrewWelcomeEmail } from "../services/email";
+import { createAccessToken } from "../utils/jwt";
 
 type CrewFormPayload = Omit<Crew, "id" | "password">;
-
-function generatePassword(): string {
-  return randomBytes(10).toString("base64").slice(0, 12);
-}
 
 const FLAT_FIELDS = [
   "firstname",
@@ -48,7 +43,7 @@ function getString(body: Record<string, unknown>, key: string): string | undefin
 function hasRequiredFormFields(
   body: Record<string, unknown>,
   files: { passport_document?: Express.Multer.File[]; identity_document?: Express.Multer.File[] }
-): { ok: true; data: CrewFormPayload } | { ok: false; message: string } {
+): { ok: true; data: CrewFormPayload; password: string } | { ok: false; message: string } {
   for (const key of FLAT_FIELDS) {
     if (!getString(body, key)) {
       return { ok: false, message: `Missing or invalid field: ${key}` };
@@ -67,6 +62,10 @@ function hasRequiredFormFields(
   const identityType = getString(body, "identity_type") as IdentityType | undefined;
   if (!identityType || !Object.values(IdentityType).includes(identityType)) {
     return { ok: false, message: "identity_type must be one of: national_id, driving_license, identity_number" };
+  }
+  const password = getString(body, "password");
+  if (!password || password.length < 6) {
+    return { ok: false, message: "password is required and must be at least 6 characters" };
   }
   const passportFile = files.passport_document?.[0];
   const identityFile = files.identity_document?.[0];
@@ -105,7 +104,7 @@ function hasRequiredFormFields(
       identity_document: identityFile.path,
     },
   };
-  return { ok: true, data };
+  return { ok: true, data, password };
 }
 
 interface CrewFormFiles {
@@ -120,6 +119,44 @@ export async function getCrew(_req: import("express").Request, res: Response) {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching crew:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function loginCrew(
+  req: import("express").Request,
+  res: Response
+) {
+  try {
+    const { email, password } = req.body as { email?: string; password?: string };
+    if (!email || typeof email !== "string" || !password || typeof password !== "string") {
+      return res.status(400).json({ message: "Email and password are required." });
+    }
+
+    const crew = await findCrewByEmailWithPassword(email);
+    if (!crew) {
+      return res.status(401).json({ message: "Invalid email or password." });
+    }
+
+    const match = await bcrypt.compare(password, crew.password);
+    if (!match) {
+      return res.status(401).json({ message: "Invalid email or password." });
+    }
+
+    const { password: _p, ...crewPublic } = crew;
+    const accessToken = createAccessToken({
+      userId: crewPublic.id,
+      email: crewPublic.email,
+      role: "crew",
+    });
+    return res.json({
+      message: "Login successful.",
+      accessToken,
+      crew: crewPublic,
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error logging in crew:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
@@ -142,22 +179,10 @@ export async function postCrew(
       return res.status(409).json({ message: "Crew with this email already exists." });
     }
 
-    const plainPassword = generatePassword();
-    const hashedPassword = await bcrypt.hash(plainPassword, 10);
+    const hashedPassword = await bcrypt.hash(result.password, 10);
     const dataWithPassword = { ...result.data, password: hashedPassword };
 
     const crew = await createCrew(dataWithPassword);
-
-    try {
-      await sendCrewWelcomeEmail(result.data.email, result.data.firstname, plainPassword);
-    } catch (emailError) {
-      // eslint-disable-next-line no-console
-      console.error("Failed to send welcome email:", emailError);
-      return res.status(201).json({
-        message: "Crew created successfully, but failed to send welcome email.",
-        crew,
-      });
-    }
 
     return res.status(201).json({
       message: "Crew created successfully.",

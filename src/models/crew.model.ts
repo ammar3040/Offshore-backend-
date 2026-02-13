@@ -126,6 +126,12 @@ export async function findCrewByEmail(email: string): Promise<CrewPublic | null>
   return doc ? toCrew(doc) : null;
 }
 
+export async function findCrewByEmailWithPassword(email: string): Promise<(CrewPublic & { password: string }) | null> {
+  const doc = await CrewModel.findOne({ email: email.toLowerCase() }).select("+password");
+  if (!doc) return null;
+  return { ...toCrew(doc), password: doc.password };
+}
+
 export async function findAllCrew(): Promise<CrewPublic[]> {
   const docs = await CrewModel.find().sort({ createdAt: -1 });
   return docs.map((doc) => toCrew(doc));

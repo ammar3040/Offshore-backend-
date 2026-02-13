@@ -1,6 +1,8 @@
 import { Router } from "express";
 import adminRoutes from "./admin.routes";
+import crewInviteRoutes from "./crewInvite.routes";
 import crewRoutes from "./crew.route";
+import projectRoutes from "./project.routes";
 
 const router = Router();
 
@@ -11,6 +13,8 @@ router.get("/health", (_req, res) => {
 
 router.use("/admin", adminRoutes);
 router.use("/crew", crewRoutes);
+router.use("/crew-invite", crewInviteRoutes);
+router.use("/project", projectRoutes);
 
 export default router;
 
