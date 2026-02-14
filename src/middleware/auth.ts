@@ -19,6 +19,7 @@ export function authenticateCrew(
 
   try {
     const payload = verifyAccessToken(token);
+    console.log("🚀 ~ authenticateCrew ~ payload:", payload)
     if (payload.role !== "crew") {
       return res.status(403).json({ message: "Invalid token." });
     }
@@ -43,6 +44,7 @@ export function authenticateAdmin(
 
   try {
     const payload = verifyAccessToken(token);
+    console.log("🚀 ~ authenticateAdmin ~ payload:", payload)
     if (payload.role !== "admin") {
       return res.status(403).json({ message: "Invalid token." });
     }

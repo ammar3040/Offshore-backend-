@@ -11,9 +11,13 @@ import {
 } from "../models";
 import type { Project, ProjectDuration } from "../models/project.model";
 
-export async function getProjects(_req: import("express").Request, res: Response) {
+export async function getProjects(req: AuthenticatedRequest, res: Response) {
   try {
-    const projects = await findAllProjects();
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+    const projects = await findAllProjects({ createdBy: userId });
     return res.json({ projects });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -60,7 +64,7 @@ export async function postProject(req: AuthenticatedRequest, res: Response) {
       description: body.description,
       duration: body.duration,
       span: body.span,
-      createdBy: userId,
+      createdBy: new mongoose.Types.ObjectId(userId),
       participants,
       status: body.status,
     });
@@ -90,7 +94,7 @@ export async function patchProject(req: import("express").Request<{ id: string }
     if (body.title !== undefined) updateData.title = body.title;
     if (body.description !== undefined) updateData.description = body.description;
     if (body.span !== undefined) updateData.span = body.span;
-    if (body.createdBy !== undefined) updateData.createdBy = body.createdBy;
+    if (body.createdBy !== undefined) updateData.createdBy = new mongoose.Types.ObjectId(body.createdBy);
     if (body.status !== undefined) updateData.status = body.status;
     if (body.duration !== undefined) updateData.duration = body.duration;
     if (body.participants !== undefined) {

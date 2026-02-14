@@ -42,7 +42,7 @@ export const updateProjectSchema = Joi.object({
   description: Joi.string().trim().optional(),
   duration: durationSchema.optional(),
   span: Joi.string().trim().optional(),
-  createdBy: Joi.string().trim().optional(),
+  createdBy: objectId.optional(),
   participants: Joi.array().items(objectId).optional(),
   status: Joi.string()
     .valid(...Object.values(ProjectStatus))
