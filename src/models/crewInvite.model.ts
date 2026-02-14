@@ -60,6 +60,28 @@ export async function createCrewInvite(
   return toCrewInvite(doc);
 }
 
+export async function findPendingInvitesByCrewId(crewId: string): Promise<CrewInvite[]> {
+  if (!mongoose.Types.ObjectId.isValid(crewId)) return [];
+  const docs = await CrewInviteModel.find({
+    crew_id: new mongoose.Types.ObjectId(crewId),
+    acceptanceStatus: AcceptanceStatus.Pending,
+  })
+    .sort({ createdAt: -1 })
+    .populate("crew_id project_id");
+  return docs.map((doc) => toCrewInvite(doc));
+}
+
+export async function findAcceptedInvitesByCrewId(crewId: string): Promise<CrewInvite[]> {
+  if (!mongoose.Types.ObjectId.isValid(crewId)) return [];
+  const docs = await CrewInviteModel.find({
+    crew_id: new mongoose.Types.ObjectId(crewId),
+    acceptanceStatus: AcceptanceStatus.Accepted,
+  })
+    .sort({ createdAt: -1 })
+    .populate("crew_id project_id");
+  return docs.map((doc) => toCrewInvite(doc));
+}
+
 export async function acceptCrewInvite(
   crewId: string,
   projectId: string

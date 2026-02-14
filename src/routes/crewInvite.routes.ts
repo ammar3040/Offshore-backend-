@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { acceptInvite, inviteCrewToProject } from "../controllers";
+import { acceptInvite, getMyEnrolledProjects, getMyPendingInvites, inviteCrewToProject } from "../controllers";
 import { authenticateAdmin, authenticateCrew } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import {
@@ -8,6 +8,9 @@ import {
 } from "../validations/crewInvite.validation";
 
 const router = Router();
+
+router.get("/me/pending", authenticateCrew, getMyPendingInvites);
+router.get("/me/enrolled", authenticateCrew, getMyEnrolledProjects);
 
 router.post(
   "/project/:project_id",

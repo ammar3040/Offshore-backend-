@@ -1,8 +1,9 @@
 import bcrypt from "bcrypt";
 import { Response } from "express";
-import { createCrew, findAllCrew, findCrewByEmail, findCrewByEmailWithPassword, IdentityType } from "../models";
+import { createCrew, findAllCrew, findCrewByEmail, findCrewByEmailWithPassword, findCrewById, IdentityType } from "../models";
 import type { Crew } from "../models/crew.model";
 import { createAccessToken } from "../utils/jwt";
+import type { AuthenticatedRequest } from "../middleware/auth";
 
 type CrewFormPayload = Omit<Crew, "id" | "password">;
 
@@ -115,6 +116,24 @@ interface CrewFormFiles {
 export async function getCrew(_req: import("express").Request, res: Response) {
   try {
     const crew = await findAllCrew();
+    return res.json({ crew });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching crew:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function getCrewMe(req: AuthenticatedRequest, res: Response) {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized." });
+    }
+    const crew = await findCrewById(userId);
+    if (!crew) {
+      return res.status(404).json({ message: "Crew not found." });
+    }
     return res.json({ crew });
   } catch (error) {
     // eslint-disable-next-line no-console

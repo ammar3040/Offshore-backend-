@@ -1,6 +1,6 @@
 import { Response } from "express";
 import mongoose from "mongoose";
-import { acceptCrewInvite, createCrewInvite } from "../models";
+import { acceptCrewInvite, createCrewInvite, findAcceptedInvitesByCrewId, findPendingInvitesByCrewId } from "../models";
 import { findProjectById } from "../models/project.model";
 import type { AuthenticatedRequest } from "../middleware/auth";
 
@@ -38,6 +38,47 @@ export async function inviteCrewToProject(
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error inviting crew to project:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function getMyPendingInvites(req: AuthenticatedRequest, res: Response) {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+    const invites = await findPendingInvitesByCrewId(userId);
+    return res.json({ invites });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching pending invites:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function getMyEnrolledProjects(req: AuthenticatedRequest, res: Response) {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+    const acceptedInvites = await findAcceptedInvitesByCrewId(userId);
+    const projectIds = [
+      ...new Set(
+        acceptedInvites.map((inv) => {
+          const p = inv.project_id;
+          return p instanceof mongoose.Types.ObjectId ? p.toString() : (p as { _id: mongoose.Types.ObjectId })._id.toString();
+        })
+      ),
+    ];
+    const projects = (
+      await Promise.all(projectIds.map((id) => findProjectById(id)))
+    ).filter((p): p is NonNullable<typeof p> => p != null);
+    return res.json({ projects });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching enrolled projects:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
