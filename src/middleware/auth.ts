@@ -54,3 +54,28 @@ export function authenticateAdmin(
     return res.status(401).json({ message: "Invalid or expired token." });
   }
 }
+
+/** Accepts both admin and crew tokens */
+export function authenticateAdminOrCrew(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+
+  if (!token) {
+    return res.status(401).json({ message: "Access token required." });
+  }
+
+  try {
+    const payload = verifyAccessToken(token);
+    if (payload.role !== "admin" && payload.role !== "crew") {
+      return res.status(403).json({ message: "Invalid token." });
+    }
+    req.user = payload;
+    next();
+  } catch {
+    return res.status(401).json({ message: "Invalid or expired token." });
+  }
+}

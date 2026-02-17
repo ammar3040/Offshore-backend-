@@ -1,6 +1,12 @@
 import { Response } from "express";
 import mongoose from "mongoose";
-import { acceptCrewInvite, createCrewInvite, findAcceptedInvitesByCrewId, findPendingInvitesByCrewId } from "../models";
+import {
+  acceptCrewInvite,
+  createCrewInvite,
+  findAcceptedInvitesByCrewId,
+  findExistingInviteCrewIdsForProject,
+  findPendingInvitesByCrewId,
+} from "../models";
 import { findProjectById } from "../models/project.model";
 import type { AuthenticatedRequest } from "../middleware/auth";
 
@@ -22,8 +28,19 @@ export async function inviteCrewToProject(
     }
 
     const projectObjectId = new mongoose.Types.ObjectId(project_id);
+    const crewObjectIds = crew_ids.map((id) => new mongoose.Types.ObjectId(id));
+    const existingCrewIds = await findExistingInviteCrewIdsForProject(projectObjectId, crewObjectIds);
+    const newCrewIds = crew_ids.filter((id) => !existingCrewIds.has(id));
+
+    if (newCrewIds.length === 0) {
+      return res.status(409).json({
+        message: "All selected crew members have already been invited to this project.",
+        already_invited: [...existingCrewIds],
+      });
+    }
+
     const invites = await Promise.all(
-      crew_ids.map((crewId) =>
+      newCrewIds.map((crewId) =>
         createCrewInvite({
           crew_id: new mongoose.Types.ObjectId(crewId),
           project_id: projectObjectId,
@@ -34,6 +51,10 @@ export async function inviteCrewToProject(
     return res.status(201).json({
       message: "Crew invitation(s) sent successfully.",
       invites,
+      ...(existingCrewIds.size > 0 && {
+        already_invited: [...existingCrewIds],
+        skipped_message: `${existingCrewIds.size} crew member(s) already invited and were skipped.`,
+      }),
     });
   } catch (error) {
     // eslint-disable-next-line no-console

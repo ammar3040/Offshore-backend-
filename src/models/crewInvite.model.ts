@@ -30,6 +30,8 @@ const crewInviteSchema = new Schema<CrewInviteDocument>(
   { timestamps: true }
 );
 
+crewInviteSchema.index({ crew_id: 1, project_id: 1 }, { unique: true });
+
 const CrewInviteModel: Model<CrewInviteDocument> =
   mongoose.models.CrewInvite ?? mongoose.model<CrewInviteDocument>("CrewInvite", crewInviteSchema);
 
@@ -51,6 +53,18 @@ export async function findCrewInviteById(id: string): Promise<CrewInvite | null>
 export async function findAllCrewInvites(): Promise<CrewInvite[]> {
   const docs = await CrewInviteModel.find().sort({ createdAt: -1 }).populate("crew_id project_id");
   return docs.map((doc) => toCrewInvite(doc));
+}
+
+export async function findExistingInviteCrewIdsForProject(
+  projectId: mongoose.Types.ObjectId,
+  crewIds: mongoose.Types.ObjectId[]
+): Promise<Set<string>> {
+  if (crewIds.length === 0) return new Set();
+  const docs = await CrewInviteModel.find({
+    project_id: projectId,
+    crew_id: { $in: crewIds },
+  }).select("crew_id");
+  return new Set(docs.map((d) => d.crew_id.toString()));
 }
 
 export async function createCrewInvite(

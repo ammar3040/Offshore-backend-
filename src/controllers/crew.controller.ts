@@ -1,6 +1,15 @@
 import bcrypt from "bcrypt";
 import { Response } from "express";
-import { createCrew, findAllCrew, findCrewByEmail, findCrewByEmailWithPassword, findCrewById, IdentityType } from "../models";
+import {
+  createCrew,
+  findAllCrew,
+  findCrewByEmail,
+  findCrewByEmailWithPassword,
+  findCrewById,
+  findCrewIdsWithAvailabilityOverlappingRange,
+  IdentityType,
+} from "../models";
+import { findProjectById } from "../models/project.model";
 import type { Crew } from "../models/crew.model";
 import { createAccessToken } from "../utils/jwt";
 import type { AuthenticatedRequest } from "../middleware/auth";
@@ -120,6 +129,36 @@ export async function getCrew(_req: import("express").Request, res: Response) {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching crew:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function getCrewAvailableForProject(
+  req: import("express").Request<{ project_id: string }>,
+  res: Response
+) {
+  try {
+    const { project_id } = req.params;
+
+    const project = await findProjectById(project_id);
+    if (!project) {
+      return res.status(404).json({ message: "Project not found." });
+    }
+
+    const { startDate, endDate } = project.duration;
+    const crewIds = await findCrewIdsWithAvailabilityOverlappingRange(
+      new Date(startDate),
+      new Date(endDate)
+    );
+
+    const crew = (
+      await Promise.all(crewIds.map((id) => findCrewById(id.toString())))
+    ).filter((c): c is NonNullable<typeof c> => c != null);
+
+    return res.json({ crew });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching crew available for project:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
