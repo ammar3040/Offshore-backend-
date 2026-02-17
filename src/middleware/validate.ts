@@ -13,7 +13,19 @@ export function validate(schema: Joi.Schema, source: ValidationSource = "body") 
       return res.status(400).json({ message });
     }
 
-    req[source] = value;
+    // req.query and req.params can be getter-only; mutate in place instead of assigning
+    const target = req[source];
+    if (
+      source !== "body" &&
+      target &&
+      typeof target === "object" &&
+      !Array.isArray(target)
+    ) {
+      Object.keys(target).forEach((k) => delete (target as Record<string, unknown>)[k]);
+      Object.assign(target, value);
+    } else {
+      (req as unknown as Record<string, unknown>)[source] = value;
+    }
     next();
   };
 }
