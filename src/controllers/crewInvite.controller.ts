@@ -3,11 +3,12 @@ import mongoose from "mongoose";
 import {
   acceptCrewInvite,
   createCrewInvite,
+  createTimesheetForCrewProject,
   findAcceptedInvitesByCrewId,
   findExistingInviteCrewIdsForProject,
   findPendingInvitesByCrewId,
 } from "../models";
-import { findProjectById } from "../models/project.model";
+import { findProjectById, updateProject } from "../models/project.model";
 import type { AuthenticatedRequest } from "../middleware/auth";
 
 export async function inviteCrewToProject(
@@ -119,6 +120,23 @@ export async function acceptInvite(
     const invite = await acceptCrewInvite(userId, project_id);
     if (!invite) {
       return res.status(404).json({ message: "Invite not found or already processed." });
+    }
+
+    // Add crew to project participants and create timesheet
+    const project = await findProjectById(project_id);
+    if (project) {
+      const crewObjectId = new mongoose.Types.ObjectId(userId);
+      const participantIds = project.participants as mongoose.Types.ObjectId[];
+      const isAlreadyParticipant = participantIds.some((p) => p.toString() === userId);
+      if (!isAlreadyParticipant) {
+        await updateProject(project_id, {
+          participants: [...participantIds, crewObjectId],
+        });
+      }
+      const startDate = new Date(project.duration.startDate);
+      const endDate = new Date(project.duration.endDate);
+      const projectObjectId = new mongoose.Types.ObjectId(project_id);
+      await createTimesheetForCrewProject(crewObjectId, projectObjectId, startDate, endDate);
     }
 
     return res.json({

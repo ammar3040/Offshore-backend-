@@ -4,4 +4,5 @@ export * from "./crew.controller";
 export * from "./crewAvailability.controller";
 export * from "./crewInvite.controller";
 export * from "./project.controller";
+export * from "./timesheet.controller";
 

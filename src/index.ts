@@ -3,6 +3,7 @@ import cors from "cors";
 import express, { Request, Response } from "express";
 import routes from "./routes";
 import { connectDB } from "./dbconnection";
+import { startTimesheetWorker } from "./jobs/timesheetWorker";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -24,6 +25,7 @@ app.use("/api", routes);
 
 async function startServer() {
   await connectDB();
+  startTimesheetWorker();
 
   app.listen(PORT, () => {
     // eslint-disable-next-line no-console

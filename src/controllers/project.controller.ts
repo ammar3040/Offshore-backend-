@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import {
   createProject,
+  createTimesheetForCrewProject,
   deleteProject,
   findAllProjects,
   findProjectById,
@@ -69,6 +70,16 @@ export async function postProject(req: AuthenticatedRequest, res: Response) {
       status: body.status,
     });
 
+    // Create timesheets for all assigned crew (all days default to PRESENT)
+    const startDate = new Date(project.duration.startDate);
+    const endDate = new Date(project.duration.endDate);
+    const projectId = new mongoose.Types.ObjectId(project.id);
+    await Promise.all(
+      participants.map((crewId) =>
+        createTimesheetForCrewProject(crewId, projectId, startDate, endDate)
+      )
+    );
+
     return res.status(201).json({ message: "Project created successfully.", project });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -105,6 +116,19 @@ export async function patchProject(req: import("express").Request<{ id: string }
     if (!project) {
       return res.status(404).json({ message: "Project not found." });
     }
+
+    // Create timesheets for newly assigned crew (idempotent - skips existing)
+    if (body.participants !== undefined && project.participants?.length) {
+      const startDate = new Date(project.duration.startDate);
+      const endDate = new Date(project.duration.endDate);
+      const projectId = new mongoose.Types.ObjectId(project.id);
+      await Promise.all(
+        project.participants.map((crewId) =>
+          createTimesheetForCrewProject(crewId as mongoose.Types.ObjectId, projectId, startDate, endDate)
+        )
+      );
+    }
+
     return res.json({ message: "Project updated successfully.", project });
   } catch (error) {
     // eslint-disable-next-line no-console
