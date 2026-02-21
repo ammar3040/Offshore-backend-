@@ -58,3 +58,10 @@ export const crewTicketIdParamSchema = Joi.object({
     "any.required": "Crew ticket id is required",
   }),
 });
+
+/** For routes where :id represents crew_id (e.g. GET /crew-ticket/crew/:id) */
+export const crewIdParamSchema = Joi.object({
+  id: objectId.required().messages({
+    "any.required": "Crew id is required",
+  }),
+});

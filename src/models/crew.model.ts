@@ -121,6 +121,13 @@ export async function findCrewById(id: string): Promise<CrewPublic | null> {
   return doc ? toCrew(doc) : null;
 }
 
+/** Find crew by crew_id (the reference from CrewTicket). Queries by _id since crew_id stores Crew's _id. */
+export async function findCrewByCrewId(crewId: string): Promise<CrewPublic | null> {
+  if (!mongoose.Types.ObjectId.isValid(crewId)) return null;
+  const doc = await CrewModel.findOne({ _id: new mongoose.Types.ObjectId(crewId) });
+  return doc ? toCrew(doc) : null;
+}
+
 export async function findCrewByIds(ids: mongoose.Types.ObjectId[]): Promise<CrewPublic[]> {
   if (ids.length === 0) return [];
   const docs = await CrewModel.find({ _id: { $in: ids } });

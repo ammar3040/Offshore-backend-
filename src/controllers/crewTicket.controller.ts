@@ -6,7 +6,8 @@ import {
   findCrewTicketByProjectAndCrew,
   findCrewTicketById,
   findAllCrewTickets,
-  findCrewById,
+  findCrewTicketsByCrewId,
+  findCrewByCrewId,
   findProjectById,
   updateCrewTicket,
 } from "../models";
@@ -15,6 +16,21 @@ import type { CabinClass, TripType } from "../models/crewTicket.model";
 export async function getCrewTickets(_req: import("express").Request, res: Response) {
   try {
     const tickets = await findAllCrewTickets();
+    return res.json({ crewTickets: tickets });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching crew tickets:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function getCrewTicketsByCrewId(
+  req: import("express").Request<{ id: string }>,
+  res: Response
+) {
+  try {
+    const crewId = req.params.id; // id param is crew_id
+    const tickets = await findCrewTicketsByCrewId(crewId);
     return res.json({ crewTickets: tickets });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -64,7 +80,7 @@ export async function postCrewTicket(req: import("express").Request, res: Respon
 
     const [project, crew] = await Promise.all([
       findProjectById(body.project_id),
-      findCrewById(body.crew_id),
+      findCrewByCrewId(body.crew_id),
     ]);
     if (!project) {
       return res.status(404).json({ message: "Project not found." });

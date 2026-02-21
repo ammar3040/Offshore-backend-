@@ -3,13 +3,15 @@ import {
   deleteCrewTicketHandler,
   getCrewTicketById,
   getCrewTickets,
+  getCrewTicketsByCrewId,
   patchCrewTicket,
   postCrewTicket,
 } from "../controllers";
-import { authenticateAdmin } from "../middleware/auth";
+import { authenticateAdmin, authenticateAdminOrCrew } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import {
   createCrewTicketSchema,
+  crewIdParamSchema,
   crewTicketIdParamSchema,
   updateCrewTicketSchema,
 } from "../validations/crewTicket.validation";
@@ -17,7 +19,8 @@ import {
 const router = Router();
 
 router.get("/", authenticateAdmin, getCrewTickets);
-router.get("/:id", authenticateAdmin, validate(crewTicketIdParamSchema, "params"), getCrewTicketById);
+router.get("/crew/:id", authenticateAdminOrCrew, validate(crewIdParamSchema, "params"), getCrewTicketsByCrewId);
+router.get("/:id", authenticateAdminOrCrew, validate(crewTicketIdParamSchema, "params"), getCrewTicketById);
 router.post("/", authenticateAdmin, validate(createCrewTicketSchema), postCrewTicket);
 router.patch(
   "/:id",
