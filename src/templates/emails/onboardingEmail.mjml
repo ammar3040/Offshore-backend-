@@ -1,0 +1,46 @@
+<mjml>
+  <mj-head>
+    <mj-title>Welcome to Marine Flight</mj-title>
+    <mj-preview>Your crew account has been created. Here are your login credentials.</mj-preview>
+    <mj-attributes>
+      <mj-all font-family="Helvetica, Arial, sans-serif" />
+      <mj-text color="#333333" font-size="16px" line-height="24px" />
+    </mj-attributes>
+  </mj-head>
+  <mj-body background-color="#f4f4f4">
+    <mj-section background-color="#ffffff" padding="40px">
+      <mj-column>
+        <mj-text font-size="28px" font-weight="bold" color="#1a365d" align="center">
+          Welcome to Marine Flight
+        </mj-text>
+        <mj-divider border-color="#e2e8f0" border-width="2px" width="80px" />
+        <mj-text font-size="20px" padding-top="24px">
+          Hello {{firstname}}!
+        </mj-text>
+        <mj-text padding-top="16px">
+          Your crew account has been created successfully. You can now log in to access the Marine Flight platform.
+        </mj-text>
+        <mj-text font-size="18px" font-weight="bold" padding-top="24px">
+          Your login credentials:
+        </mj-text>
+        <mj-table padding="16px 0" cellpadding="8" cellspacing="0" border="1px solid #e2e8f0">
+          <tr style="background-color:#f8fafc;">
+            <td style="font-weight:bold; color:#64748b;">Email</td>
+            <td>{{email}}</td>
+          </tr>
+          <tr>
+            <td style="font-weight:bold; color:#64748b;">Password</td>
+            <td>{{password}}</td>
+          </tr>
+        </mj-table>
+        <mj-text padding-top="24px" color="#64748b" font-size="14px">
+          Please change your password after your first login for security.
+        </mj-text>
+        <mj-divider border-color="#e2e8f0" padding="24px 0" />
+        <mj-text font-size="14px" color="#94a3b8" align="center">
+          Best regards,<br />Marine Flight Team
+        </mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

@@ -1,3 +1,7 @@
+import fs from "fs";
+import path from "path";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const mjml2html = require("mjml") as (mjml: string) => { html: string };
 import nodemailer from "nodemailer";
 
 const transporter = nodemailer.createTransport({
@@ -13,26 +17,28 @@ const transporter = nodemailer.createTransport({
       : undefined,
 });
 
+function getOnboardingEmailHtml(firstname: string, email: string, password: string): string {
+  const templatePath = path.join(process.cwd(), "src", "templates", "emails", "onboardingEmail.mjml");
+  const mjmlSource = fs.readFileSync(templatePath, "utf-8");
+  const mjmlWithVars = mjmlSource
+    .replace(/\{\{firstname\}\}/g, firstname)
+    .replace(/\{\{email\}\}/g, email)
+    .replace(/\{\{password\}\}/g, password);
+  const { html } = mjml2html(mjmlWithVars);
+  return html;
+}
+
 export async function sendCrewWelcomeEmail(
   to: string,
   firstname: string,
   password: string
 ): Promise<void> {
   const from = process.env.SMTP_FROM || process.env.SMTP_USER || "noreply@marine-flight.com";
+  const html = getOnboardingEmailHtml(firstname, to, password);
   await transporter.sendMail({
     from,
     to,
     subject: "Welcome to Marine Flight - Your Crew Account",
-    html: `
-      <h2>Welcome, ${firstname}!</h2>
-      <p>Your crew account has been created successfully.</p>
-      <p>Here are your login credentials:</p>
-      <ul>
-        <li><strong>Email:</strong> ${to}</li>
-        <li><strong>Password:</strong> ${password}</li>
-      </ul>
-      <p>Please change your password after your first login.</p>
-      <p>Best regards,<br/>Marine Flight Team</p>
-    `,
+    html,
   });
 }

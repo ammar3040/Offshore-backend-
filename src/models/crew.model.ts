@@ -121,6 +121,15 @@ export async function findCrewById(id: string): Promise<CrewPublic | null> {
   return doc ? toCrew(doc) : null;
 }
 
+export async function findCrewByIdWithPassword(
+  id: string
+): Promise<(CrewPublic & { password: string }) | null> {
+  if (!mongoose.Types.ObjectId.isValid(id)) return null;
+  const doc = await CrewModel.findById(id).select("+password");
+  if (!doc) return null;
+  return { ...toCrew(doc), password: doc.password };
+}
+
 export async function findCrewByEmail(email: string): Promise<CrewPublic | null> {
   const doc = await CrewModel.findOne({ email: email.toLowerCase() });
   return doc ? toCrew(doc) : null;
@@ -140,4 +149,10 @@ export async function findAllCrew(): Promise<CrewPublic[]> {
 export async function createCrew(data: Omit<Crew, "id">): Promise<CrewPublic> {
   const doc = await CrewModel.create(data);
   return toCrew(doc);
+}
+
+export async function updateCrewPassword(id: string, hashedPassword: string): Promise<CrewPublic | null> {
+  if (!mongoose.Types.ObjectId.isValid(id)) return null;
+  const doc = await CrewModel.findByIdAndUpdate(id, { password: hashedPassword }, { new: true });
+  return doc ? toCrew(doc) : null;
 }

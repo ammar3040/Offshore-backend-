@@ -1,12 +1,16 @@
 import bcrypt from "bcrypt";
+import crypto from "crypto";
 import { Response } from "express";
+import { sendCrewWelcomeEmail } from "../services/email";
 import {
   createCrew,
   findAllCrew,
   findCrewByEmail,
   findCrewByEmailWithPassword,
   findCrewById,
+  findCrewByIdWithPassword,
   findCrewIdsWithAvailabilityOverlappingRange,
+  updateCrewPassword,
   IdentityType,
 } from "../models";
 import mongoose from "mongoose";
@@ -56,7 +60,7 @@ function getString(body: Record<string, unknown>, key: string): string | undefin
 function hasRequiredFormFields(
   body: Record<string, unknown>,
   files: { passport_document?: Express.Multer.File[]; identity_document?: Express.Multer.File[] }
-): { ok: true; data: CrewFormPayload; password: string } | { ok: false; message: string } {
+): { ok: true; data: CrewFormPayload } | { ok: false; message: string } {
   for (const key of FLAT_FIELDS) {
     if (!getString(body, key)) {
       return { ok: false, message: `Missing or invalid field: ${key}` };
@@ -76,10 +80,10 @@ function hasRequiredFormFields(
   if (!identityType || !Object.values(IdentityType).includes(identityType)) {
     return { ok: false, message: "identity_type must be one of: national_id, driving_license, identity_number" };
   }
-  const password = getString(body, "password");
-  if (!password || password.length < 6) {
-    return { ok: false, message: "password is required and must be at least 6 characters" };
-  }
+  // const password = getString(body, "password");
+  // if (!password || password.length < 6) {
+  //   return { ok: false, message: "password is required and must be at least 6 characters" };
+  // }
   const passportFile = files.passport_document?.[0];
   const identityFile = files.identity_document?.[0];
   if (!passportFile?.path) {
@@ -117,12 +121,18 @@ function hasRequiredFormFields(
       identity_document: identityFile.path,
     },
   };
-  return { ok: true, data, password };
+  return { ok: true, data };
 }
 
 interface CrewFormFiles {
   passport_document?: Express.Multer.File[];
   identity_document?: Express.Multer.File[];
+}
+
+function generateAlphanumericPassword(length = 12): string {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = crypto.randomBytes(length);
+  return Array.from(bytes, (b) => chars[b % chars.length]).join("");
 }
 
 export async function getCrew(_req: import("express").Request, res: Response) {
@@ -261,10 +271,14 @@ export async function postCrew(
       return res.status(409).json({ message: "Crew with this email already exists." });
     }
 
-    const hashedPassword = await bcrypt.hash(result.password, 10);
-    const dataWithPassword = { ...result.data, password: hashedPassword };
+    const plainPassword = generateAlphanumericPassword(12);
+    const hashedPassword = await bcrypt.hash(plainPassword, 10);
+    const crew = await createCrew({ ...result.data, password: hashedPassword });
 
-    const crew = await createCrew(dataWithPassword);
+    // eslint-disable-next-line no-console
+    console.log("Crew created - generated password for", result.data.email, ":", plainPassword);
+
+    await sendCrewWelcomeEmail(result.data.email, result.data.firstname, plainPassword);
 
     return res.status(201).json({
       message: "Crew created successfully.",
@@ -273,6 +287,64 @@ export async function postCrew(
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error creating crew:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function resetCrewPassword(req: AuthenticatedRequest, res: Response) {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized." });
+    }
+
+    const { oldPassword, newPassword, confirmPassword } = req.body as {
+      oldPassword?: string;
+      newPassword?: string;
+      confirmPassword?: string;
+    };
+
+    if (
+      !oldPassword ||
+      typeof oldPassword !== "string" ||
+      !newPassword ||
+      typeof newPassword !== "string" ||
+      !confirmPassword ||
+      typeof confirmPassword !== "string"
+    ) {
+      return res.status(400).json({
+        message: "oldPassword, newPassword, and confirmPassword are required.",
+      });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ message: "newPassword and confirmPassword do not match." });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: "newPassword must be at least 6 characters." });
+    }
+
+    const crew = await findCrewByIdWithPassword(userId);
+    if (!crew) {
+      return res.status(404).json({ message: "Crew not found." });
+    }
+
+    const match = await bcrypt.compare(oldPassword, crew.password);
+    if (!match) {
+      return res.status(401).json({ message: "Invalid old password." });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const updated = await updateCrewPassword(userId, hashedPassword);
+    if (!updated) {
+      return res.status(500).json({ message: "Failed to update password." });
+    }
+
+    return res.json({ message: "Password reset successfully." });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error resetting crew password:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
