@@ -96,6 +96,38 @@ export async function findAcceptedInvitesByCrewId(crewId: string): Promise<CrewI
   return docs.map((doc) => toCrewInvite(doc));
 }
 
+/**
+ * Find crew IDs who have accepted invites to projects whose duration overlaps with the given range.
+ * These crews are considered "assigned" and not available for other projects in that period.
+ */
+export async function findCrewIdsWithAcceptedInvitesOverlappingRange(
+  startDate: Date,
+  endDate: Date
+): Promise<mongoose.Types.ObjectId[]> {
+  const ProjectModel = mongoose.model("Project");
+  const docs = await CrewInviteModel.aggregate([
+    { $match: { acceptanceStatus: AcceptanceStatus.Accepted } },
+    {
+      $lookup: {
+        from: ProjectModel.collection.name,
+        localField: "project_id",
+        foreignField: "_id",
+        as: "project",
+      },
+    },
+    { $unwind: "$project" },
+    {
+      $match: {
+        "project.duration.startDate": { $lte: endDate },
+        "project.duration.endDate": { $gte: startDate },
+      },
+    },
+    { $project: { crew_id: 1 } },
+    { $group: { _id: "$crew_id" } },
+  ]);
+  return docs.map((d) => d._id as mongoose.Types.ObjectId);
+}
+
 export async function acceptCrewInvite(
   crewId: string,
   projectId: string

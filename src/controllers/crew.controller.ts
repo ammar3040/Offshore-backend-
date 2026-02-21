@@ -15,7 +15,10 @@ import {
 } from "../models";
 import mongoose from "mongoose";
 import { findCrewAvailabilitiesByCrewId } from "../models/crewAvailability.model";
-import { findAcceptedInvitesByCrewId } from "../models/crewInvite.model";
+import {
+  findAcceptedInvitesByCrewId,
+  findCrewIdsWithAcceptedInvitesOverlappingRange,
+} from "../models/crewInvite.model";
 import { findProjectById } from "../models/project.model";
 import type { Crew } from "../models/crew.model";
 import { createAccessToken } from "../utils/jwt";
@@ -159,13 +162,16 @@ export async function getCrewAvailableForProject(
     }
 
     const { startDate, endDate } = project.duration;
-    const crewIds = await findCrewIdsWithAvailabilityOverlappingRange(
-      new Date(startDate),
-      new Date(endDate)
-    );
+    const [availableCrewIds, assignedCrewIds] = await Promise.all([
+      findCrewIdsWithAvailabilityOverlappingRange(new Date(startDate), new Date(endDate)),
+      findCrewIdsWithAcceptedInvitesOverlappingRange(new Date(startDate), new Date(endDate)),
+    ]);
+
+    const assignedSet = new Set(assignedCrewIds.map((id) => id.toString()));
+    const unassignedCrewIds = availableCrewIds.filter((id) => !assignedSet.has(id.toString()));
 
     const crew = (
-      await Promise.all(crewIds.map((id) => findCrewById(id.toString())))
+      await Promise.all(unassignedCrewIds.map((id) => findCrewById(id.toString())))
     ).filter((c): c is NonNullable<typeof c> => c != null);
 
     return res.json({ crew });
