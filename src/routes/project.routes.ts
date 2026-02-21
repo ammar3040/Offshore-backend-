@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   deleteProjectHandler,
   getProjectById,
+  getProjectCrew,
   getProjects,
   patchProject,
   postProject,
@@ -17,6 +18,7 @@ import {
 const router = Router();
 
 router.get("/", authenticateAdmin, getProjects);
+router.get("/:id/crew", authenticateAdmin, validate(projectIdParamSchema, "params"), getProjectCrew);
 router.get("/:id", authenticateAdmin, validate(projectIdParamSchema, "params"), getProjectById);
 router.post("/", authenticateAdmin, validate(createProjectSchema), postProject);
 router.patch(

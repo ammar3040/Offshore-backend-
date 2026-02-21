@@ -6,6 +6,7 @@ import {
   createTimesheetForCrewProject,
   deleteProject,
   findAllProjects,
+  findCrewByIds,
   findProjectById,
   updateProject,
   ProjectStatus,
@@ -38,6 +39,25 @@ export async function getProjectById(req: import("express").Request<{ id: string
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching project:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function getProjectCrew(req: import("express").Request<{ id: string }>, res: Response) {
+  try {
+    const { id } = req.params;
+    const project = await findProjectById(id);
+    if (!project) {
+      return res.status(404).json({ message: "Project not found." });
+    }
+    const participantIds = (project.participants ?? []).map((p) =>
+      p instanceof mongoose.Types.ObjectId ? p : (p as { _id: mongoose.Types.ObjectId })._id
+    );
+    const crew = await findCrewByIds(participantIds);
+    return res.json({ crew });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching project crew:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
