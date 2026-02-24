@@ -65,3 +65,45 @@ export const crewIdParamSchema = Joi.object({
     "any.required": "Crew id is required",
   }),
 });
+
+/** For POST /book - pass selected flight from search response (Option 1) */
+export const bookFlightSchema = Joi.object({
+  project_id: objectId.required().messages({
+    "any.required": "project_id is required",
+  }),
+  crew_ids: Joi.array().items(objectId).min(1).required().messages({
+    "any.required": "crew_ids is required",
+    "array.min": "At least one crew_id is required",
+  }),
+  flight: Joi.object({
+    id: Joi.string().required().messages({
+      "any.required": "flight.id is required",
+    }),
+    legs: Joi.array()
+      .items(
+        Joi.object({
+          itinerary: Joi.array()
+            .items(
+              Joi.object({
+                fromAirport: Joi.string().optional(),
+                toAirport: Joi.string().optional(),
+              })
+            )
+            .optional(),
+        })
+      )
+      .min(1)
+      .required()
+      .messages({
+        "any.required": "flight.legs from search response is required",
+      }),
+    fares: Joi.array()
+      .items(Joi.object({ cabin: Joi.string().optional() }))
+      .optional(),
+  }).required().messages({
+    "any.required": "flight object from search response is required",
+  }),
+  adult: Joi.number().integer().min(0).default(1),
+  children: Joi.number().integer().min(0).default(0),
+  infants: Joi.number().integer().min(0).default(0),
+});
