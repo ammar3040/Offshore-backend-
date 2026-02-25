@@ -127,11 +127,10 @@ function buildItineraryHtml(legs: FlightLeg[]): string {
       `);
     });
   });
-  if (rows.length === 0) {
-    return '<table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; background:#1e293b; border-radius:8px; overflow:hidden;"><tr><td style="padding:16px; color:#94a3b8;">No itinerary details available.</td></tr></table>';
-  }
-  return `
-    <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; background:#1e293b; border-radius:8px; overflow:hidden;">
+  const tableHtml = rows.length === 0
+    ? '<table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; background:#1e293b; border-radius:8px; overflow:hidden; min-width:320px;"><tr><td style="padding:16px; color:#94a3b8;">No itinerary details available.</td></tr></table>'
+    : `
+    <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; background:#1e293b; border-radius:8px; overflow:hidden; min-width:480px;">
       <thead>
         <tr style="background:#0f172a;">
           <th style="padding:12px 16px; text-align:left; font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:1px;">Flight</th>
@@ -145,6 +144,7 @@ function buildItineraryHtml(legs: FlightLeg[]): string {
       <tbody>${rows.join("")}</tbody>
     </table>
   `;
+  return `<div style="overflow-x:auto; -webkit-overflow-scrolling:touch; margin:0 -4px;">${tableHtml}</div>`;
 }
 
 function getFlightTicketEmailHtml(
