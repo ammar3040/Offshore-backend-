@@ -44,7 +44,6 @@ export function authenticateAdmin(
 
   try {
     const payload = verifyAccessToken(token);
-    console.log("🚀 ~ authenticateAdmin ~ payload:", payload)
     if (payload.role !== "admin") {
       return res.status(403).json({ message: "Invalid token." });
     }
@@ -55,7 +54,31 @@ export function authenticateAdmin(
   }
 }
 
-/** Accepts both admin and crew tokens */
+export function authenticateSuperAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+
+  if (!token) {
+    return res.status(401).json({ message: "Access token required." });
+  }
+
+  try {
+    const payload = verifyAccessToken(token);
+    if (payload.role !== "superadmin") {
+      return res.status(403).json({ message: "Superadmin access required." });
+    }
+    req.user = payload;
+    next();
+  } catch {
+    return res.status(401).json({ message: "Invalid or expired token." });
+  }
+}
+
+/** Accepts admin, superadmin, and crew tokens */
 export function authenticateAdminOrCrew(
   req: AuthenticatedRequest,
   res: Response,
@@ -70,7 +93,7 @@ export function authenticateAdminOrCrew(
 
   try {
     const payload = verifyAccessToken(token);
-    if (payload.role !== "admin" && payload.role !== "crew") {
+    if (payload.role !== "admin" && payload.role !== "superadmin" && payload.role !== "crew") {
       return res.status(403).json({ message: "Invalid token." });
     }
     req.user = payload;
