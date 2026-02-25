@@ -66,6 +66,12 @@ export const crewIdParamSchema = Joi.object({
   }),
 });
 
+/** For POST /search-flights - pagination params */
+export const searchFlightsSchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(100).default(20),
+}).unknown(true);
+
 /** For POST /book - pass selected flight from search response (Option 1) */
 export const bookFlightSchema = Joi.object({
   project_id: objectId.required().messages({
@@ -87,10 +93,11 @@ export const bookFlightSchema = Joi.object({
               Joi.object({
                 fromAirport: Joi.string().optional(),
                 toAirport: Joi.string().optional(),
-              })
+              }).unknown(true)
             )
             .optional(),
         })
+        .unknown(true)
       )
       .min(1)
       .required()
@@ -98,9 +105,12 @@ export const bookFlightSchema = Joi.object({
         "any.required": "flight.legs from search response is required",
       }),
     fares: Joi.array()
-      .items(Joi.object({ cabin: Joi.string().optional() }))
+      .items(Joi.object({ cabin: Joi.string().optional() }).unknown(true))
       .optional(),
-  }).required().messages({
+  })
+  .unknown(true)
+  .required()
+  .messages({
     "any.required": "flight object from search response is required",
   }),
   adult: Joi.number().integer().min(0).default(1),

@@ -761,6 +761,8 @@ export async function searchFlightsController(req: import("express").Request, re
       currency = "GBP",
       project_id,
       crew_ids,
+      page = 1,
+      limit = 20,
     } = body;
 
     const crewIdsArray = Array.isArray(crew_ids) ? crew_ids : [];
@@ -904,7 +906,16 @@ export async function searchFlightsController(req: import("express").Request, re
         });
       }
       const flights = applyAdminLogic(results);
-      return res.json({ project_id, crew_ids: crewIdsArray, flights });
+      const total = flights.length;
+      const totalPages = Math.ceil(total / limit);
+      const startIndex = (page - 1) * limit;
+      const paginatedFlights = flights.slice(startIndex, startIndex + limit);
+      return res.json({
+        project_id,
+        crew_ids: crewIdsArray,
+        flights: paginatedFlights,
+        pagination: { page, limit, total, totalPages },
+      });
     } else {
       const data = await fetchRiya(
         buildPayload(
@@ -920,7 +931,16 @@ export async function searchFlightsController(req: import("express").Request, re
       );
       const transformedData = transformRiyaResponse(data || {}, fromData.code, toData.code);
       const flights = applyAdminLogic(transformedData);
-      return res.json({ project_id, crew_ids: crewIdsArray, flights });
+      const total = flights.length;
+      const totalPages = Math.ceil(total / limit);
+      const startIndex = (page - 1) * limit;
+      const paginatedFlights = flights.slice(startIndex, startIndex + limit);
+      return res.json({
+        project_id,
+        crew_ids: crewIdsArray,
+        flights: paginatedFlights,
+        pagination: { page, limit, total, totalPages },
+      });
     }
   } catch (error) {
     console.error("Error processing search request:", error);

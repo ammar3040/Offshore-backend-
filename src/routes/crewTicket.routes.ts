@@ -17,6 +17,7 @@ import {
   createCrewTicketSchema,
   crewIdParamSchema,
   crewTicketIdParamSchema,
+  searchFlightsSchema,
   updateCrewTicketSchema,
 } from "../validations/crewTicket.validation";
 
@@ -26,7 +27,7 @@ router.get("/", authenticateAdmin, getCrewTickets);
 router.get("/crew/:id", authenticateAdminOrCrew, validate(crewIdParamSchema, "params"), getCrewTicketsByCrewId);
 router.get("/:id", authenticateAdminOrCrew, validate(crewTicketIdParamSchema, "params"), getCrewTicketById);
 router.post("/", authenticateAdmin, validate(createCrewTicketSchema), postCrewTicket);
-router.post("/search-flights", authenticateAdmin, searchFlightsController);
+router.post("/search-flights", authenticateAdmin, validate(searchFlightsSchema), searchFlightsController);
 router.post("/book", authenticateAdmin, validate(bookFlightSchema), bookFlight);
 router.patch(
   "/:id",
