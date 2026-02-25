@@ -16,6 +16,7 @@ import {
 import { CabinClass, TripType } from "../models/crewTicket.model";
 import { convert, fetchRates, type CurrencyCode, type ExchangeRates } from "../lib/currency";
 import { getAdminSettings } from "../lib/admin-settings";
+import { sendFlightTicketEmail, type FlightTicketData } from "../services/email";
 
 export async function getCrewTickets(_req: import("express").Request, res: Response) {
   try {
@@ -292,6 +293,13 @@ export async function bookFlight(req: import("express").Request, res: Response) 
         trip,
       });
       created.push(ticket);
+
+      try {
+        const currency = (body.flight as { originalCurrency?: string }).originalCurrency ?? "INR";
+        await sendFlightTicketEmail(crew.email, crew.firstname, body.flight as FlightTicketData, currency);
+      } catch (emailErr) {
+        console.error(`Failed to send flight ticket email to ${crew.email}:`, emailErr);
+      }
     }
 
     return res.status(201).json({
