@@ -63,6 +63,11 @@ export async function findAdminByEmail(email: string): Promise<Admin | null> {
   return toAdmin(doc);
 }
 
+export async function findAllAdmins(): Promise<AdminPublic[]> {
+  const docs = await AdminModel.find().sort({ createdAt: -1 });
+  return docs.map((doc) => toAdminPublic(doc));
+}
+
 export async function createAdmin(data: Omit<Admin, "id">): Promise<AdminPublic> {
   const doc = await AdminModel.create(data);
   return toAdminPublic(doc);

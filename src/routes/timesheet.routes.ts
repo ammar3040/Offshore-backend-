@@ -6,7 +6,7 @@ import {
   getTimesheetsByProject,
   patchTimesheetEntryStatus,
 } from "../controllers/timesheet.controller";
-import { authenticateAdmin, authenticateCrew } from "../middleware/auth";
+import { authenticateAdminOrSuperAdmin, authenticateCrew } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import {
   crewProjectParamsSchema,
@@ -36,18 +36,18 @@ router.patch(
   patchTimesheetEntryStatus
 );
 
-// Admin: get timesheet by id
+// Admin/SuperAdmin: get timesheet by id
 router.get(
   "/:id",
-  authenticateAdmin,
+  authenticateAdminOrSuperAdmin,
   validate(timesheetIdParamSchema, "params"),
   getTimesheetById
 );
 
-// Admin: get all timesheets for a project
+// Admin/SuperAdmin: get all timesheets for a project
 router.get(
   "/project/:project_id/all",
-  authenticateAdmin,
+  authenticateAdminOrSuperAdmin,
   validate(crewProjectParamsSchema, "params"),
   getTimesheetsByProject
 );

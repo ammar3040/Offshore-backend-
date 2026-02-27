@@ -9,3 +9,9 @@ export const crewUpload = multer({
   { name: "passport_document", maxCount: 1 },
   { name: "identity_document", maxCount: 1 },
 ]);
+
+/** Single PDF file for crew ticket upload - field name "pdf" */
+export const crewTicketPdfUpload = multer({
+  storage: crewStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+}).single("pdf");

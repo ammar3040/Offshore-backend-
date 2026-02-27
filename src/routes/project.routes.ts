@@ -7,7 +7,7 @@ import {
   patchProject,
   postProject,
 } from "../controllers";
-import { authenticateAdmin } from "../middleware/auth";
+import { authenticateAdmin, authenticateAdminOrSuperAdmin } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import {
   createProjectSchema,
@@ -17,9 +17,9 @@ import {
 
 const router = Router();
 
-router.get("/", authenticateAdmin, getProjects);
-router.get("/:id/crew", authenticateAdmin, validate(projectIdParamSchema, "params"), getProjectCrew);
-router.get("/:id", authenticateAdmin, validate(projectIdParamSchema, "params"), getProjectById);
+router.get("/", authenticateAdminOrSuperAdmin, getProjects);
+router.get("/:id/crew", authenticateAdminOrSuperAdmin, validate(projectIdParamSchema, "params"), getProjectCrew);
+router.get("/:id", authenticateAdminOrSuperAdmin, validate(projectIdParamSchema, "params"), getProjectById);
 router.post("/", authenticateAdmin, validate(createProjectSchema), postProject);
 router.patch(
   "/:id",

@@ -3,6 +3,7 @@ import bcrypt from "bcrypt";
 import {
   createAdmin,
   findAdminByEmail,
+  findAllAdmins,
   findSuperAdminByEmail,
 } from "../models";
 import { createAccessToken } from "../utils/jwt";
@@ -43,6 +44,18 @@ export async function loginSuperAdmin(req: Request, res: Response) {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error logging in superadmin:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+/** Fetch all admins - superadmin only */
+export async function getAllAdmins(_req: AuthenticatedRequest, res: Response) {
+  try {
+    const admins = await findAllAdmins();
+    return res.json({ admins });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching admins:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }

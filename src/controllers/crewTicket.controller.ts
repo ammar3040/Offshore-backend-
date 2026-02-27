@@ -124,6 +124,31 @@ export async function postCrewTicket(req: import("express").Request, res: Respon
   }
 }
 
+export async function uploadTicketPdf(
+  req: import("express").Request<{ id: string }> & { uploadedPdfUrl?: string },
+  res: Response
+) {
+  try {
+    const { id } = req.params;
+    const pdfUrl = req.uploadedPdfUrl;
+    if (!pdfUrl) {
+      return res.status(400).json({ message: "PDF upload failed or no file provided." });
+    }
+    const ticket = await updateCrewTicket(id, { pdf: pdfUrl });
+    if (!ticket) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+    return res.status(200).json({
+      message: "Ticket PDF uploaded successfully.",
+      crewTicket: ticket,
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error uploading ticket PDF:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
 export async function patchCrewTicket(
   req: import("express").Request<{ id: string }>,
   res: Response

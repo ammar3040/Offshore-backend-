@@ -7,5 +7,6 @@ cloudinary.config({
 });
 
 export const CLOUDINARY_CREW_FOLDER = "marine-flight/crew";
+export const CLOUDINARY_CREW_TICKET_FOLDER = "marine-flight/crew-tickets";
 
 export default cloudinary;

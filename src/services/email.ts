@@ -105,46 +105,91 @@ function escapeHtml(s: string): string {
 }
 
 function buildItineraryHtml(legs: FlightLeg[]): string {
-  const rows: string[] = [];
-  legs.forEach((leg) => {
+  const labelStyle = "font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:1.2px; font-weight:600; padding-bottom:3px;";
+  const valueStyle = "font-size:14px; color:#f1f5f9; font-weight:500;";
+  const cards: string[] = [];
+
+  legs.forEach((leg, legIdx) => {
     const segments = leg.itinerary ?? [];
-    segments.forEach((seg) => {
+    segments.forEach((seg, segIdx) => {
       const dep = formatFlightDateTime(seg.departureTime);
       const arr = formatFlightDateTime(seg.arrivalTime);
       const flightNum = escapeHtml([seg.airlineCode, seg.flightNumber].filter(Boolean).join(" ") || "—");
-      const fromLoc = escapeHtml(seg.fromAirport || `${seg.from ?? "—"}`);
-      const toLoc = escapeHtml(seg.toAirport || `${seg.to ?? "—"}`);
-      const cabinVal = escapeHtml(seg.cabin ?? leg.duration ?? "—");
-      rows.push(`
-        <tr>
-          <td style="padding:12px 16px; border-bottom:1px solid #334155; font-size:14px; color:#94a3b8;">${flightNum}</td>
-          <td style="padding:12px 16px; border-bottom:1px solid #334155; font-size:14px; color:#f8fafc;">${fromLoc}</td>
-          <td style="padding:12px 16px; border-bottom:1px solid #334155; font-size:14px; color:#f8fafc;">${toLoc}</td>
-          <td style="padding:12px 16px; border-bottom:1px solid #334155; font-size:13px; color:#94a3b8;">${dep.date} ${dep.time}</td>
-          <td style="padding:12px 16px; border-bottom:1px solid #334155; font-size:13px; color:#94a3b8;">${arr.date} ${arr.time}</td>
-          <td style="padding:12px 16px; border-bottom:1px solid #334155; font-size:13px; color:#94a3b8;">${cabinVal}</td>
-        </tr>
+      const fromCode = escapeHtml(seg.from ?? "—");
+      const toCode = escapeHtml(seg.to ?? "—");
+      const fromFull = escapeHtml(seg.fromAirport || fromCode);
+      const toFull = escapeHtml(seg.toAirport || toCode);
+      const cabinVal = escapeHtml(seg.cabin ?? "—");
+      const baggageVal = escapeHtml(seg.baggage ?? "—");
+      const cabinBagVal = escapeHtml(seg.cabinBaggage ?? "—");
+      const segLabel = legs.length > 1 || segments.length > 1
+        ? `<div style="font-size:10px; color:#3b82f6; text-transform:uppercase; letter-spacing:1px; font-weight:700; padding-bottom:12px;">Segment ${legIdx + 1}.${segIdx + 1}</div>`
+        : "";
+
+      cards.push(`
+        <div style="background:#1e293b; border-radius:12px; padding:20px; margin-bottom:12px;">
+          ${segLabel}
+          <!-- Flight number + route -->
+          <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+            <tr>
+              <td style="padding-bottom:16px;" width="50%">
+                <div style="${labelStyle}">Flight</div>
+                <div style="font-size:16px; color:#60a5fa; font-weight:700;">${flightNum}</div>
+              </td>
+              <td style="padding-bottom:16px; text-align:right;" width="50%">
+                <div style="${labelStyle}">Cabin</div>
+                <div style="${valueStyle}">${cabinVal}</div>
+              </td>
+            </tr>
+          </table>
+          <!-- From/To -->
+          <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; background:#111827; border-radius:8px; padding:0;">
+            <tr>
+              <td style="padding:14px 16px;" width="40%">
+                <div style="${labelStyle}">From</div>
+                <div style="font-size:22px; font-weight:800; color:#f8fafc;">${fromCode}</div>
+                <div style="font-size:11px; color:#94a3b8; padding-top:2px;">${dep.date} &middot; ${dep.time}</div>
+              </td>
+              <td style="text-align:center; padding:14px 4px;" width="20%">
+                <div style="color:#3b82f6; font-size:18px;">&#10230;</div>
+              </td>
+              <td style="padding:14px 16px; text-align:right;" width="40%">
+                <div style="${labelStyle}">To</div>
+                <div style="font-size:22px; font-weight:800; color:#f8fafc;">${toCode}</div>
+                <div style="font-size:11px; color:#94a3b8; padding-top:2px;">${arr.date} &middot; ${arr.time}</div>
+              </td>
+            </tr>
+          </table>
+          <!-- Airport names -->
+          <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; padding-top:8px;">
+            <tr>
+              <td style="padding:10px 0 0; font-size:11px; color:#64748b; line-height:16px;" width="50%">${fromFull}</td>
+              <td style="padding:10px 0 0; font-size:11px; color:#64748b; line-height:16px; text-align:right;" width="50%">${toFull}</td>
+            </tr>
+          </table>
+          <!-- Baggage info -->
+          <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; margin-top:14px; border-top:1px solid #334155; padding-top:12px;">
+            <tr>
+              <td style="padding-top:12px;" width="50%">
+                <div style="${labelStyle}">Check-in Baggage</div>
+                <div style="${valueStyle}">${baggageVal}</div>
+              </td>
+              <td style="padding-top:12px;" width="50%">
+                <div style="${labelStyle}">Cabin Baggage</div>
+                <div style="${valueStyle}">${cabinBagVal}</div>
+              </td>
+            </tr>
+          </table>
+        </div>
       `);
     });
   });
-  const tableHtml = rows.length === 0
-    ? '<table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; background:#1e293b; border-radius:8px; overflow:hidden; min-width:320px;"><tr><td style="padding:16px; color:#94a3b8;">No itinerary details available.</td></tr></table>'
-    : `
-    <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; background:#1e293b; border-radius:8px; overflow:hidden; min-width:480px;">
-      <thead>
-        <tr style="background:#0f172a;">
-          <th style="padding:12px 16px; text-align:left; font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:1px;">Flight</th>
-          <th style="padding:12px 16px; text-align:left; font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:1px;">From</th>
-          <th style="padding:12px 16px; text-align:left; font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:1px;">To</th>
-          <th style="padding:12px 16px; text-align:left; font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:1px;">Departure</th>
-          <th style="padding:12px 16px; text-align:left; font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:1px;">Arrival</th>
-          <th style="padding:12px 16px; text-align:left; font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:1px;">Cabin</th>
-        </tr>
-      </thead>
-      <tbody>${rows.join("")}</tbody>
-    </table>
-  `;
-  return `<div style="overflow-x:auto; -webkit-overflow-scrolling:touch; margin:0 -4px;">${tableHtml}</div>`;
+
+  if (cards.length === 0) {
+    return '<div style="background:#1e293b; border-radius:12px; padding:20px; color:#94a3b8; font-size:14px;">No itinerary details available.</div>';
+  }
+
+  return cards.join("");
 }
 
 function getFlightTicketEmailHtml(

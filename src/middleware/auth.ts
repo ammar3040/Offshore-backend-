@@ -54,6 +54,31 @@ export function authenticateAdmin(
   }
 }
 
+/** Accepts admin or superadmin - for GET routes that both roles can access */
+export function authenticateAdminOrSuperAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+
+  if (!token) {
+    return res.status(401).json({ message: "Access token required." });
+  }
+
+  try {
+    const payload = verifyAccessToken(token);
+    if (payload.role !== "admin" && payload.role !== "superadmin") {
+      return res.status(403).json({ message: "Admin or superadmin access required." });
+    }
+    req.user = payload;
+    next();
+  } catch {
+    return res.status(401).json({ message: "Invalid or expired token." });
+  }
+}
+
 export function authenticateSuperAdmin(
   req: AuthenticatedRequest,
   res: Response,

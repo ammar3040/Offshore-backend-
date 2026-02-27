@@ -9,9 +9,12 @@ import {
   postCrewTicket,
   searchFlights,
   searchFlightsController,
+  uploadTicketPdf,
 } from "../controllers";
-import { authenticateAdmin, authenticateAdminOrCrew } from "../middleware/auth";
+import { authenticateAdmin, authenticateAdminOrCrew, authenticateAdminOrSuperAdmin } from "../middleware/auth";
 import { validate } from "../middleware/validate";
+import { crewTicketPdfUpload } from "../middleware/upload";
+import { uploadCrewTicketPdfToCloudinary } from "../middleware/cloudinaryUpload";
 import {
   bookFlightSchema,
   createCrewTicketSchema,
@@ -23,15 +26,23 @@ import {
 
 const router = Router();
 
-router.get("/", authenticateAdmin, getCrewTickets);
+router.get("/", authenticateAdminOrSuperAdmin, getCrewTickets);
 router.get("/crew/:id", authenticateAdminOrCrew, validate(crewIdParamSchema, "params"), getCrewTicketsByCrewId);
 router.get("/:id", authenticateAdminOrCrew, validate(crewTicketIdParamSchema, "params"), getCrewTicketById);
 router.post("/", authenticateAdmin, validate(createCrewTicketSchema), postCrewTicket);
 router.post("/search-flights", authenticateAdmin, validate(searchFlightsSchema), searchFlightsController);
 router.post("/book", authenticateAdmin, validate(bookFlightSchema), bookFlight);
+router.post(
+  "/:id/upload-ticket",
+  authenticateAdminOrSuperAdmin,
+  validate(crewTicketIdParamSchema, "params"),
+  crewTicketPdfUpload,
+  uploadCrewTicketPdfToCloudinary,
+  uploadTicketPdf
+);
 router.patch(
   "/:id",
-  authenticateAdmin,
+  authenticateAdminOrSuperAdmin,
   validate(crewTicketIdParamSchema, "params"),
   validate(updateCrewTicketSchema),
   patchCrewTicket

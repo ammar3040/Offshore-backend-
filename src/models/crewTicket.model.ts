@@ -24,6 +24,8 @@ export interface CrewTicket {
   children: number;
   infants: number;
   trip: TripType;
+  /** Optional URL to uploaded ticket PDF */
+  pdf?: string;
 }
 
 export interface CrewTicketDocument extends Omit<CrewTicket, "id">, Document {
@@ -58,6 +60,7 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
       enum: Object.values(TripType),
       required: true,
     },
+    pdf: { type: String, required: false },
   },
   { timestamps: true }
 );
@@ -79,6 +82,7 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     children: doc.children,
     infants: doc.infants,
     trip: doc.trip as TripType,
+    pdf: doc.pdf,
   };
 }
 
