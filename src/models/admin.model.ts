@@ -68,6 +68,10 @@ export async function findAllAdmins(): Promise<AdminPublic[]> {
   return docs.map((doc) => toAdminPublic(doc));
 }
 
+export async function countAdmins(): Promise<number> {
+  return AdminModel.countDocuments();
+}
+
 export async function createAdmin(data: Omit<Admin, "id">): Promise<AdminPublic> {
   const doc = await AdminModel.create(data);
   return toAdminPublic(doc);

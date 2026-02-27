@@ -1,10 +1,17 @@
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
 import {
+  countAdmins,
+  countActiveAdmins,
+  countCrew,
+  countCrewTickets,
+  countProjects,
   createAdmin,
   findAdminByEmail,
   findAllAdmins,
+  findSuperAdminById,
   findSuperAdminByEmail,
+  updateSuperAdminMarkup,
 } from "../models";
 import { createAccessToken } from "../utils/jwt";
 import { AuthenticatedRequest } from "../middleware/auth";
@@ -48,6 +55,34 @@ export async function loginSuperAdmin(req: Request, res: Response) {
   }
 }
 
+/** Analytics dashboard - superadmin only */
+export async function getAnalytics(req: AuthenticatedRequest, res: Response) {
+  try {
+    const [totalAdmins, activeAdmins, totalProjects, totalCrew, totalTickets, superAdmin] =
+      await Promise.all([
+        countAdmins(),
+        countActiveAdmins(),
+        countProjects(),
+        countCrew(),
+        countCrewTickets(),
+        req.user?.userId ? findSuperAdminById(req.user.userId) : null,
+      ]);
+
+    return res.json({
+      totalAdmins,
+      activeAdmins,
+      totalProjects,
+      totalCrew,
+      totalTickets,
+      markup: superAdmin?.markup ?? null,
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching analytics:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
 /** Fetch all admins - superadmin only */
 export async function getAllAdmins(_req: AuthenticatedRequest, res: Response) {
   try {
@@ -56,6 +91,33 @@ export async function getAllAdmins(_req: AuthenticatedRequest, res: Response) {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching admins:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+/** Add/upsert markup for the authenticated superadmin */
+export async function upsertMarkup(req: AuthenticatedRequest, res: Response) {
+  try {
+    const raw = req.body.markup;
+    const markup = typeof raw === "string" ? parseFloat(raw) : Number(raw);
+    if (typeof markup !== "number" || isNaN(markup)) {
+      return res.status(400).json({ message: "markup must be a valid number." });
+    }
+    const superAdminId = req.user?.userId;
+    if (!superAdminId) {
+      return res.status(401).json({ message: "Unauthorized." });
+    }
+    const superAdmin = await updateSuperAdminMarkup(superAdminId, markup);
+    if (!superAdmin) {
+      return res.status(404).json({ message: "SuperAdmin not found." });
+    }
+    return res.status(200).json({
+      message: "Markup updated successfully.",
+      superAdmin,
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error updating markup:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }

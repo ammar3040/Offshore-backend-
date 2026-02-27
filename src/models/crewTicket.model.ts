@@ -146,3 +146,7 @@ export async function deleteCrewTicket(id: string): Promise<boolean> {
   const result = await CrewTicketModel.findByIdAndDelete(id);
   return !!result;
 }
+
+export async function countCrewTickets(): Promise<number> {
+  return CrewTicketModel.countDocuments();
+}

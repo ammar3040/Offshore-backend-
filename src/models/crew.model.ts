@@ -169,3 +169,7 @@ export async function updateCrewPassword(id: string, hashedPassword: string): Pr
   const doc = await CrewModel.findByIdAndUpdate(id, { password: hashedPassword }, { new: true });
   return doc ? toCrew(doc) : null;
 }
+
+export async function countCrew(): Promise<number> {
+  return CrewModel.countDocuments();
+}

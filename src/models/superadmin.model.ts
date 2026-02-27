@@ -7,6 +7,8 @@ export interface SuperAdmin {
   email: string;
   password: string; // hashed password
   phone: string;
+  /** Optional markup value */
+  markup?: number;
 }
 
 export interface SuperAdminDocument extends Omit<SuperAdmin, "id">, Document {
@@ -23,6 +25,7 @@ const superAdminSchema = new Schema<SuperAdminDocument>(
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true, select: false },
     phone: { type: String, required: true },
+    markup: { type: Number, required: false },
   },
   { timestamps: true }
 );
@@ -39,6 +42,7 @@ function toSuperAdmin(doc: SuperAdminDocument): SuperAdmin {
     email: doc.email,
     password: doc.password,
     phone: doc.phone,
+    markup: doc.markup,
   };
 }
 
@@ -49,6 +53,7 @@ function toSuperAdminPublic(doc: SuperAdminDocument): SuperAdminPublic {
     lastname: doc.lastname,
     email: doc.email,
     phone: doc.phone,
+    markup: doc.markup,
   };
 }
 
@@ -71,4 +76,17 @@ export async function createSuperAdmin(
 ): Promise<SuperAdminPublic> {
   const doc = await SuperAdminModel.create(data);
   return toSuperAdminPublic(doc);
+}
+
+export async function updateSuperAdminMarkup(
+  id: string,
+  markup: number
+): Promise<SuperAdminPublic | null> {
+  if (!mongoose.Types.ObjectId.isValid(id)) return null;
+  const doc = await SuperAdminModel.findByIdAndUpdate(
+    id,
+    { markup },
+    { new: true }
+  );
+  return doc ? toSuperAdminPublic(doc) : null;
 }

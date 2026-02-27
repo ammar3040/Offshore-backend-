@@ -141,3 +141,13 @@ export async function deleteProject(id: string): Promise<boolean> {
   const result = await ProjectModel.findByIdAndDelete(id);
   return !!result;
 }
+
+export async function countProjects(): Promise<number> {
+  return ProjectModel.countDocuments();
+}
+
+/** Count distinct admins who have created at least one project (active admins) */
+export async function countActiveAdmins(): Promise<number> {
+  const adminIds = await ProjectModel.distinct("createdBy");
+  return adminIds.length;
+}
