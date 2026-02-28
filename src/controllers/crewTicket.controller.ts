@@ -12,10 +12,12 @@ import {
   findCrewByCrewId,
   findProjectById,
   updateCrewTicket,
+  sumMarkupByProject,
 } from "../models";
 import { CabinClass, TripType } from "../models/crewTicket.model";
 import { convert, fetchRates, type CurrencyCode, type ExchangeRates } from "../lib/currency";
 import { getAdminSettings } from "../lib/admin-settings";
+import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { sendFlightTicketEmail, type FlightTicketData } from "../services/email";
 
 export async function getCrewTickets(_req: import("express").Request, res: Response) {
@@ -111,6 +113,8 @@ export async function postCrewTicket(req: import("express").Request, res: Respon
       children: body.children ?? 0,
       infants: body.infants ?? 0,
       trip: body.trip as import("../models/crewTicket.model").TripType,
+      markup: 0,
+      balance: 0,
     });
 
     return res.status(201).json({
@@ -262,6 +266,10 @@ export async function bookFlight(req: import("express").Request, res: Response) 
       return res.status(404).json({ message: "Project not found." });
     }
 
+    const admin = project.createdBy;
+    const bookingMarkup =
+      typeof admin === "object" && "markup" in admin ? (admin.markup ?? 0) : 0;
+
     const fl = body.flight;
     const flightId = fl.id;
     const firstLeg = fl.legs[0];
@@ -285,6 +293,8 @@ export async function bookFlight(req: import("express").Request, res: Response) 
     const created: import("../models/crewTicket.model").CrewTicket[] = [];
     const errors: { crew_id: string; message: string }[] = [];
 
+    let runningBalance = await sumMarkupByProject(body.project_id);
+
     for (const crewId of body.crew_ids) {
       if (!mongoose.Types.ObjectId.isValid(crewId)) {
         errors.push({ crew_id: crewId, message: "Invalid crew_id." });
@@ -306,6 +316,8 @@ export async function bookFlight(req: import("express").Request, res: Response) 
         continue;
       }
 
+      runningBalance += bookingMarkup;
+
       const ticket = await createCrewTicket({
         crew_id: new mongoose.Types.ObjectId(crewId),
         project_id: new mongoose.Types.ObjectId(body.project_id),
@@ -316,6 +328,8 @@ export async function bookFlight(req: import("express").Request, res: Response) 
         children,
         infants,
         trip,
+        markup: bookingMarkup,
+        balance: runningBalance,
       });
       created.push(ticket);
 
@@ -800,7 +814,12 @@ export async function searchFlightsController(req: import("express").Request, re
 
     const crewIdsArray = Array.isArray(crew_ids) ? crew_ids : [];
 
-    const adminSettings = await getAdminSettings();
+    const [adminSettings, superAdmin] = await Promise.all([
+      getAdminSettings(),
+      findFirstSuperAdmin(),
+    ]);
+
+    const superAdminCashback = superAdmin?.cashback ?? null;
 
     let rates: ExchangeRates;
     try {
@@ -821,12 +840,9 @@ export async function searchFlightsController(req: import("express").Request, re
         requestedCurrency,
         rates
       );
-      const localFlatCashback = convert(
-        adminSettings.incentives.flatCashback || 0,
-        baseCurrency as CurrencyCode,
-        requestedCurrency,
-        rates
-      );
+      const localFlatCashback = superAdminCashback != null
+        ? convert(superAdminCashback, baseCurrency as CurrencyCode, requestedCurrency, rates)
+        : convert(adminSettings.incentives.flatCashback || 0, baseCurrency as CurrencyCode, requestedCurrency, rates);
 
       const airlineIncentivesMap = new Map<string, number>();
       (adminSettings.incentives.airlineSpecific || []).forEach((a) => {
@@ -848,10 +864,13 @@ export async function searchFlightsController(req: import("express").Request, re
         const airlineIncentive = airlineIncentivesMap.get(airlineCode) ?? 0;
 
         const updatedFares = flight.fares.map((fare: any) => {
-          let price = convert(fare.totalFare, originalCurrency, requestedCurrency, rates);
-          price += localFlatMarkup;
-          price = price * (1 + (adminSettings.pricing.percentageMarkup || 0) / 100);
-          return { ...fare, totalFare: Math.round(Math.max(0, price)) };
+          const basePrice = convert(fare.totalFare, originalCurrency, requestedCurrency, rates);
+          let markedUpPrice = basePrice;
+          markedUpPrice += localFlatMarkup;
+          markedUpPrice = markedUpPrice * (1 + (adminSettings.pricing.percentageMarkup || 0) / 100);
+          const totalFare = Math.round(Math.max(0, markedUpPrice));
+          const markup = Math.round(Math.max(0, totalFare - basePrice));
+          return { ...fare, price: Math.round(basePrice), markup, totalFare };
         });
 
         const cashback = airlineIncentive > 0 ? airlineIncentive : localFlatCashback;

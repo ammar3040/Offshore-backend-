@@ -9,6 +9,8 @@ export interface SuperAdmin {
   phone: string;
   /** Optional markup value */
   markup?: number;
+  /** Optional cashback value */
+  cashback?: number | null;
 }
 
 export interface SuperAdminDocument extends Omit<SuperAdmin, "id">, Document {
@@ -26,6 +28,7 @@ const superAdminSchema = new Schema<SuperAdminDocument>(
     password: { type: String, required: true, select: false },
     phone: { type: String, required: true },
     markup: { type: Number, required: false },
+    cashback: { type: Number, required: false, default: null },
   },
   { timestamps: true }
 );
@@ -43,6 +46,7 @@ function toSuperAdmin(doc: SuperAdminDocument): SuperAdmin {
     password: doc.password,
     phone: doc.phone,
     markup: doc.markup,
+    cashback: doc.cashback ?? null,
   };
 }
 
@@ -54,7 +58,13 @@ function toSuperAdminPublic(doc: SuperAdminDocument): SuperAdminPublic {
     email: doc.email,
     phone: doc.phone,
     markup: doc.markup,
+    cashback: doc.cashback ?? null,
   };
+}
+
+export async function findFirstSuperAdmin(): Promise<SuperAdminPublic | null> {
+  const doc = await SuperAdminModel.findOne().sort({ createdAt: 1 });
+  return doc ? toSuperAdminPublic(doc) : null;
 }
 
 export async function findSuperAdminById(id: string): Promise<SuperAdminPublic | null> {
@@ -80,13 +90,13 @@ export async function createSuperAdmin(
 
 export async function updateSuperAdminMarkup(
   id: string,
-  markup: number
+  data: { markup?: number; cashback?: number | null }
 ): Promise<SuperAdminPublic | null> {
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
-  const doc = await SuperAdminModel.findByIdAndUpdate(
-    id,
-    { markup },
-    { new: true }
-  );
+  const update: Record<string, unknown> = {};
+  if (data.markup !== undefined) update.markup = data.markup;
+  if (data.cashback !== undefined) update.cashback = data.cashback;
+  if (Object.keys(update).length === 0) return findSuperAdminById(id);
+  const doc = await SuperAdminModel.findByIdAndUpdate(id, update, { new: true });
   return doc ? toSuperAdminPublic(doc) : null;
 }

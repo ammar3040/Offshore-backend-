@@ -7,6 +7,7 @@ export interface Admin {
   email: string;
   password: string; // hashed password
   phone: string;
+  markup?: number;
 }
 
 export interface AdminDocument extends Omit<Admin, "id">, Document {
@@ -23,6 +24,7 @@ const adminSchema = new Schema<AdminDocument>(
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true, select: false },
     phone: { type: String, required: true },
+    markup: { type: Number, required: true, default: 0 },
   },
   { timestamps: true }
 );
@@ -38,6 +40,7 @@ function toAdmin(doc: AdminDocument): Admin {
     email: doc.email,
     password: doc.password,
     phone: doc.phone,
+    markup: doc.markup ?? 0,
   };
 }
 
@@ -48,6 +51,7 @@ function toAdminPublic(doc: AdminDocument): AdminPublic {
     lastname: doc.lastname,
     email: doc.email,
     phone: doc.phone,
+    markup: doc.markup ?? 0,
   };
 }
 

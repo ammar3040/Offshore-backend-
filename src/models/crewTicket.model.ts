@@ -26,6 +26,10 @@ export interface CrewTicket {
   trip: TripType;
   /** Optional URL to uploaded ticket PDF */
   pdf?: string;
+  /** Markup applied to this booking */
+  markup: number;
+  /** Running balance — cumulative markup across bookings for the project */
+  balance: number;
 }
 
 export interface CrewTicketDocument extends Omit<CrewTicket, "id">, Document {
@@ -61,6 +65,8 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
       required: true,
     },
     pdf: { type: String, required: false },
+    markup: { type: Number, required: true, default: 0 },
+    balance: { type: Number, required: true, default: 0 },
   },
   { timestamps: true }
 );
@@ -83,6 +89,8 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     infants: doc.infants,
     trip: doc.trip as TripType,
     pdf: doc.pdf,
+    markup: doc.markup ?? 0,
+    balance: doc.balance ?? 0,
   };
 }
 
@@ -149,4 +157,12 @@ export async function deleteCrewTicket(id: string): Promise<boolean> {
 
 export async function countCrewTickets(): Promise<number> {
   return CrewTicketModel.countDocuments();
+}
+
+export async function sumMarkupByProject(projectId: string): Promise<number> {
+  const result = await CrewTicketModel.aggregate([
+    { $match: { project_id: new mongoose.Types.ObjectId(projectId) } },
+    { $group: { _id: null, total: { $sum: "$markup" } } },
+  ]);
+  return result[0]?.total ?? 0;
 }

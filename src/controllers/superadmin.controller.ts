@@ -75,6 +75,7 @@ export async function getAnalytics(req: AuthenticatedRequest, res: Response) {
       totalCrew,
       totalTickets,
       markup: superAdmin?.markup ?? null,
+      cashback: superAdmin?.cashback ?? null,
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -95,29 +96,52 @@ export async function getAllAdmins(_req: AuthenticatedRequest, res: Response) {
   }
 }
 
-/** Add/upsert markup for the authenticated superadmin */
+/** Add/upsert markup and cashback for the authenticated superadmin */
 export async function upsertMarkup(req: AuthenticatedRequest, res: Response) {
   try {
-    const raw = req.body.markup;
-    const markup = typeof raw === "string" ? parseFloat(raw) : Number(raw);
-    if (typeof markup !== "number" || isNaN(markup)) {
-      return res.status(400).json({ message: "markup must be a valid number." });
+    const update: { markup?: number; cashback?: number | null } = {};
+
+    if (req.body.markup !== undefined) {
+      const raw = req.body.markup;
+      const markup = typeof raw === "string" ? parseFloat(raw) : Number(raw);
+      if (typeof markup !== "number" || isNaN(markup)) {
+        return res.status(400).json({ message: "markup must be a valid number." });
+      }
+      update.markup = markup;
     }
+
+    if (req.body.cashback !== undefined) {
+      if (req.body.cashback === null) {
+        update.cashback = null;
+      } else {
+        const raw = req.body.cashback;
+        const cashback = typeof raw === "string" ? parseFloat(raw) : Number(raw);
+        if (typeof cashback !== "number" || isNaN(cashback)) {
+          return res.status(400).json({ message: "cashback must be a valid number or null." });
+        }
+        update.cashback = cashback;
+      }
+    }
+
+    if (update.markup === undefined && update.cashback === undefined) {
+      return res.status(400).json({ message: "At least one of markup or cashback is required." });
+    }
+
     const superAdminId = req.user?.userId;
     if (!superAdminId) {
       return res.status(401).json({ message: "Unauthorized." });
     }
-    const superAdmin = await updateSuperAdminMarkup(superAdminId, markup);
+    const superAdmin = await updateSuperAdminMarkup(superAdminId, update);
     if (!superAdmin) {
       return res.status(404).json({ message: "SuperAdmin not found." });
     }
     return res.status(200).json({
-      message: "Markup updated successfully.",
+      message: "Updated successfully.",
       superAdmin,
     });
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.error("Error updating markup:", error);
+    console.error("Error updating markup/cashback:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
