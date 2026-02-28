@@ -19,6 +19,7 @@ import { convert, fetchRates, type CurrencyCode, type ExchangeRates } from "../l
 import { getAdminSettings } from "../lib/admin-settings";
 import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { sendFlightTicketEmail, type FlightTicketData } from "../services/email";
+import type { CrewTicket } from "../models/crewTicket.model";
 
 export async function getCrewTickets(_req: import("express").Request, res: Response) {
   try {
@@ -332,13 +333,6 @@ export async function bookFlight(req: import("express").Request, res: Response) 
         balance: runningBalance,
       });
       created.push(ticket);
-
-      try {
-        const currency = (body.flight as { originalCurrency?: string }).originalCurrency ?? "INR";
-        await sendFlightTicketEmail(crew.email, crew.firstname, body.flight as FlightTicketData, currency);
-      } catch (emailErr) {
-        console.error(`Failed to send flight ticket email to ${crew.email}:`, emailErr);
-      }
     }
 
     return res.status(201).json({
@@ -352,6 +346,80 @@ export async function bookFlight(req: import("express").Request, res: Response) 
     });
   } catch (error) {
     console.error("Error booking flight:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+/**
+ * Build minimal FlightTicketData from CrewTicket for sending ticket email.
+ * Used when sending ticket to crew via centralized endpoint (ticket may have been
+ * created via postCrewTicket or PDF uploaded later).
+ */
+function buildFlightDataFromCrewTicket(ticket: CrewTicket): FlightTicketData {
+  const fromName = ticket.from?.Name ?? "—";
+  const toName = ticket.to?.Name ?? "—";
+  return {
+    id: ticket.id,
+    airlineName: "Marine Flight",
+    legs: [
+      {
+        from: fromName,
+        to: toName,
+        duration: ticket.trip === "ROUND_TRIP" ? "Round trip" : "One way",
+        itinerary: [
+          {
+            from: fromName,
+            to: toName,
+            fromAirport: fromName,
+            toAirport: toName,
+            cabin: ticket.class,
+            baggage: "—",
+            cabinBaggage: "—",
+          },
+        ],
+      },
+    ],
+    fares: [{ cabin: ticket.class, totalFare: 0 }],
+  };
+}
+
+export async function sendTicketToCrewEmail(
+  req: import("express").Request<{ id: string }>,
+  res: Response
+) {
+  try {
+    const { id } = req.params;
+    const ticket = await findCrewTicketById(id);
+    if (!ticket) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+
+    const crewId =
+      typeof ticket.crew_id === "object" &&
+      ticket.crew_id &&
+      "_id" in (ticket.crew_id as object)
+        ? ((ticket.crew_id as { _id: { toString: () => string } })._id.toString() as string)
+        : String(ticket.crew_id);
+    const crew = await findCrewByCrewId(crewId);
+    if (!crew) {
+      return res.status(404).json({ message: "Crew not found." });
+    }
+
+    const flightData = buildFlightDataFromCrewTicket(ticket);
+    await sendFlightTicketEmail(
+      crew.email,
+      crew.firstname,
+      flightData,
+      "INR",
+      ticket.pdf
+    );
+
+    return res.status(200).json({
+      message: "Ticket sent successfully to crew email.",
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error sending ticket to crew email:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }

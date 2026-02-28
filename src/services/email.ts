@@ -195,10 +195,15 @@ function buildItineraryHtml(legs: FlightLeg[]): string {
 function getFlightTicketEmailHtml(
   crewFirstname: string,
   flight: FlightTicketData,
-  currency: string = "INR"
+  currency: string = "INR",
+  pdfUrl?: string
 ): string {
   const templatePath = path.join(process.cwd(), "src", "templates", "emails", "flightTicketEmail.mjml");
   const mjmlSource = fs.readFileSync(templatePath, "utf-8");
+
+  const pdfLinkHtml = pdfUrl
+    ? `<div style="background:#1e293b; border-radius:10px; padding:16px 20px; margin-top:16px; border-left:3px solid #34d399;"><strong style="color:#34d399;">Your e-ticket PDF:</strong> <a href="${escapeHtml(pdfUrl)}" style="color:#60a5fa; text-decoration:underline;">Download ticket PDF</a></div>`
+    : "";
 
   const firstLeg = flight.legs[0];
   const dep = formatFlightDateTime(firstLeg?.departureTime ?? firstLeg?.itinerary?.[0]?.departureTime);
@@ -224,7 +229,8 @@ function getFlightTicketEmailHtml(
     .replace(/\{\{cabin\}\}/g, cabin)
     .replace(/\{\{totalFare\}\}/g, String(totalFare))
     .replace(/\{\{currency\}\}/g, currency)
-    .replace(/\{\{itineraryHtml\}\}/g, buildItineraryHtml(flight.legs));
+    .replace(/\{\{itineraryHtml\}\}/g, buildItineraryHtml(flight.legs))
+    .replace(/\{\{pdfLinkHtml\}\}/g, pdfLinkHtml);
 
   const { html } = mjml2html(mjmlWithVars);
   return html;
@@ -237,10 +243,11 @@ export async function sendFlightTicketEmail(
   to: string,
   crewFirstname: string,
   flight: FlightTicketData,
-  currency: string = "INR"
+  currency: string = "INR",
+  pdfUrl?: string
 ): Promise<void> {
   const from = process.env.SMTP_FROM || process.env.SMTP_USER || "noreply@marine-flight.com";
-  const html = getFlightTicketEmailHtml(crewFirstname, flight, currency);
+  const html = getFlightTicketEmailHtml(crewFirstname, flight, currency, pdfUrl);
   await transporter.sendMail({
     from,
     to,

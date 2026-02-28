@@ -9,6 +9,7 @@ import {
   postCrewTicket,
   searchFlights,
   searchFlightsController,
+  sendTicketToCrewEmail,
   uploadTicketPdf,
 } from "../controllers";
 import { authenticateAdmin, authenticateAdminOrCrew, authenticateAdminOrSuperAdmin } from "../middleware/auth";
@@ -32,6 +33,12 @@ router.get("/:id", authenticateAdminOrCrew, validate(crewTicketIdParamSchema, "p
 router.post("/", authenticateAdmin, validate(createCrewTicketSchema), postCrewTicket);
 router.post("/search-flights", authenticateAdmin, validate(searchFlightsSchema), searchFlightsController);
 router.post("/book", authenticateAdmin, validate(bookFlightSchema), bookFlight);
+router.post(
+  "/:id/send-ticket-email",
+  authenticateAdminOrSuperAdmin,
+  validate(crewTicketIdParamSchema, "params"),
+  sendTicketToCrewEmail
+);
 router.post(
   "/:id/upload-ticket",
   authenticateAdminOrSuperAdmin,
