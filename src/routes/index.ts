@@ -1,5 +1,6 @@
 import { Router } from "express";
 import adminRoutes from "./admin.routes";
+import airportsRoutes from "./airports.routes";
 import authRoutes from "./auth.routes";
 import superadminRoutes from "./superadmin.routes";
 import crewAvailabilityRoutes from "./crewAvailability.routes";
@@ -17,6 +18,7 @@ router.get("/health", (_req, res) => {
 });
 
 router.use("/admin", adminRoutes);
+router.use("/airports", airportsRoutes);
 router.use("/auth", authRoutes);
 router.use("/superadmin", superadminRoutes);
 router.use("/crew", crewRoutes);

@@ -1093,3 +1093,56 @@ export async function searchFlightsController(req: import("express").Request, re
     return res.status(500).json({ error: "Internal Server Error" });
   }
 }
+
+/** Country code (ISO 3166-1 alpha-2) to country name mapping */
+const COUNTRY_NAMES: Record<string, string> = {
+  IN: "India", US: "United States", GB: "United Kingdom", AE: "United Arab Emirates",
+  FR: "France", DE: "Germany", NL: "Netherlands", SG: "Singapore", AU: "Australia",
+  CA: "Canada", CN: "China", JP: "Japan", KR: "South Korea", PK: "Pakistan",
+  BD: "Bangladesh", LK: "Sri Lanka", NP: "Nepal", MY: "Malaysia", TH: "Thailand",
+  ID: "Indonesia", NO: "Norway", ES: "Spain", IT: "Italy", SA: "Saudi Arabia",
+};
+
+export interface AirportSearchResult {
+  Name: string;
+  COUNTRY: string;
+  COUNTRYNAME: string;
+}
+
+export async function searchAirports(req: import("express").Request, res: Response) {
+  try {
+    const query = (req.query.query as string)?.trim();
+    if (!query || query.length < 2) {
+      return res.status(400).json({ message: "Query must be at least 2 characters." });
+    }
+
+    const response = await fetch(
+      `https://www.airportroutes.com/api/search-airports/?q=${encodeURIComponent(query)}&limit=20`
+    );
+
+    if (!response.ok) {
+      return res.status(502).json({ message: "Failed to fetch airports from external service." });
+    }
+
+    const data = (await response.json()) as { hits?: Array<{ name: string; city: string; iata: string; icao: string; country_code: string }> };
+    const hits = data.hits ?? [];
+
+    const airports: AirportSearchResult[] = hits.map((hit) => {
+      const code = hit.iata || hit.icao || "";
+      const countryCode = hit.country_code || "";
+      const countryName = COUNTRY_NAMES[countryCode] || countryCode;
+      const name = `${hit.city} [${code}] - ${hit.name}, ${countryName}`;
+      return {
+        Name: name,
+        COUNTRY: countryCode,
+        COUNTRYNAME: countryName,
+      };
+    });
+
+    return res.json(airports);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error searching airports:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}

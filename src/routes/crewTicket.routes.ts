@@ -7,6 +7,7 @@ import {
   getCrewTicketsByCrewId,
   patchCrewTicket,
   postCrewTicket,
+  searchAirports,
   searchFlights,
   searchFlightsController,
   sendTicketToCrewEmail,
@@ -28,6 +29,7 @@ import {
 const router = Router();
 
 router.get("/", authenticateAdminOrSuperAdmin, getCrewTickets);
+router.get("/airports/search", searchAirports);
 router.get("/crew/:id", authenticateAdminOrCrew, validate(crewIdParamSchema, "params"), getCrewTicketsByCrewId);
 router.get("/:id", authenticateAdminOrCrew, validate(crewTicketIdParamSchema, "params"), getCrewTicketById);
 router.post("/", authenticateAdmin, validate(createCrewTicketSchema), postCrewTicket);
