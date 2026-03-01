@@ -13,6 +13,7 @@ import {
   findProjectById,
   updateCrewTicket,
   sumMarkupByProject,
+  updateAdminBalance,
 } from "../models";
 import { CabinClass, TripType } from "../models/crewTicket.model";
 import { convert, fetchRates, type CurrencyCode, type ExchangeRates } from "../lib/currency";
@@ -256,6 +257,9 @@ export async function bookFlight(req: import("express").Request, res: Response) 
       adult?: number;
       children?: number;
       infants?: number;
+      markup?: number;
+      cashback?: number;
+      originalCurrency?: string;
     };
 
     if (!mongoose.Types.ObjectId.isValid(body.project_id)) {
@@ -268,8 +272,8 @@ export async function bookFlight(req: import("express").Request, res: Response) 
     }
 
     const admin = project.createdBy;
-    const bookingMarkup =
-      typeof admin === "object" && "markup" in admin ? (admin.markup ?? 0) : 0;
+    const adminId =
+      typeof admin === "object" && admin && "id" in admin ? (admin as { id: string }).id : null;
 
     const fl = body.flight;
     const flightId = fl.id;
@@ -290,6 +294,21 @@ export async function bookFlight(req: import("express").Request, res: Response) 
           "Could not extract from/to from flight.legs[0].itinerary[0].fromAirport and toAirport.",
       });
     }
+
+    const originalCurrency = (body.originalCurrency ?? (fl as { originalCurrency?: string }).originalCurrency ?? "INR") as CurrencyCode;
+
+    let rates: ExchangeRates;
+    try {
+      rates = await fetchRates();
+    } catch (currencyErr) {
+      console.error("Currency fetch error:", currencyErr);
+      return res.status(500).json({ message: "Could not fetch currency rates." });
+    }
+
+    const payloadMarkupRaw = body.markup ?? 0;
+    const payloadCashbackRaw = body.cashback ?? 0;
+    const markupGBP = Math.round(convert(payloadMarkupRaw, originalCurrency, "GBP", rates) * 100) / 100;
+    const cashbackGBP = Math.round(convert(payloadCashbackRaw, originalCurrency, "GBP", rates) * 100) / 100;
 
     const created: import("../models/crewTicket.model").CrewTicket[] = [];
     const errors: { crew_id: string; message: string }[] = [];
@@ -317,7 +336,7 @@ export async function bookFlight(req: import("express").Request, res: Response) 
         continue;
       }
 
-      runningBalance += bookingMarkup;
+      runningBalance += markupGBP;
 
       const ticket = await createCrewTicket({
         crew_id: new mongoose.Types.ObjectId(crewId),
@@ -329,10 +348,17 @@ export async function bookFlight(req: import("express").Request, res: Response) 
         children,
         infants,
         trip,
-        markup: bookingMarkup,
+        markup: markupGBP,
         balance: runningBalance,
       });
       created.push(ticket);
+    }
+
+    // Update admin balance: current_balance + (markup - cashback) in GBP
+    if (adminId && created.length > 0) {
+      const currentBalance =
+        typeof admin === "object" && "balance" in admin ? ((admin as { balance?: number }).balance ?? 0) : 0;
+      await updateAdminBalance(adminId, currentBalance + (markupGBP - cashbackGBP));
     }
 
     return res.status(201).json({

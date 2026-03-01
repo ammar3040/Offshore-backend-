@@ -7,7 +7,7 @@ export interface Admin {
   email: string;
   password: string; // hashed password
   phone: string;
-  markup?: number;
+  balance?: number;
 }
 
 export interface AdminDocument extends Omit<Admin, "id">, Document {
@@ -24,7 +24,7 @@ const adminSchema = new Schema<AdminDocument>(
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true, select: false },
     phone: { type: String, required: true },
-    markup: { type: Number, required: true, default: 0 },
+    balance: { type: Number, required: true, default: 0 },
   },
   { timestamps: true }
 );
@@ -40,7 +40,7 @@ function toAdmin(doc: AdminDocument): Admin {
     email: doc.email,
     password: doc.password,
     phone: doc.phone,
-    markup: doc.markup ?? 0,
+    balance: doc.balance ?? 0,
   };
 }
 
@@ -51,7 +51,7 @@ function toAdminPublic(doc: AdminDocument): AdminPublic {
     lastname: doc.lastname,
     email: doc.email,
     phone: doc.phone,
-    markup: doc.markup ?? 0,
+    balance: doc.balance ?? 0,
   };
 }
 
@@ -79,4 +79,14 @@ export async function countAdmins(): Promise<number> {
 export async function createAdmin(data: Omit<Admin, "id">): Promise<AdminPublic> {
   const doc = await AdminModel.create(data);
   return toAdminPublic(doc);
+}
+
+export async function updateAdminBalance(adminId: string, newBalance: number): Promise<AdminPublic | null> {
+  if (!mongoose.Types.ObjectId.isValid(adminId)) return null;
+  const doc = await AdminModel.findByIdAndUpdate(
+    adminId,
+    { balance: newBalance },
+    { new: true }
+  );
+  return doc ? toAdminPublic(doc) : null;
 }

@@ -3,7 +3,7 @@ import type { AdminPublic } from "./admin.model";
 
 function isPopulatedAdmin(
   val: unknown
-): val is { _id: mongoose.Types.ObjectId; firstname: string; lastname: string; email: string; phone: string; markup: number } {
+): val is { _id: mongoose.Types.ObjectId; firstname: string; lastname: string; email: string; phone: string; balance: number } {
   return (
     val !== null &&
     typeof val === "object" &&
@@ -19,7 +19,7 @@ function toAdminPublic(doc: {
   lastname: string;
   email: string;
   phone: string;
-  markup: number;
+  balance: number;
 }): AdminPublic {
   return {
     id: doc._id.toString(),
@@ -27,7 +27,7 @@ function toAdminPublic(doc: {
     lastname: doc.lastname,
     email: doc.email,
     phone: doc.phone,
-    markup: doc.markup ?? 0,
+    balance: doc.balance ?? 0,
   };
 }
 

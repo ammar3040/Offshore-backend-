@@ -116,4 +116,7 @@ export const bookFlightSchema = Joi.object({
   adult: Joi.number().integer().min(0).default(1),
   children: Joi.number().integer().min(0).default(0),
   infants: Joi.number().integer().min(0).default(0),
+  markup: Joi.number().min(0).default(0),
+  cashback: Joi.number().min(0).default(0),
+  originalCurrency: Joi.string().trim().default("INR"),
 });

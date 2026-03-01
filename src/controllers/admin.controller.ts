@@ -1,7 +1,8 @@
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
-import { findAdminByEmail } from "../models";
+import { findAdminByEmail, findAdminById } from "../models";
 import { createAccessToken } from "../utils/jwt";
+import type { AuthenticatedRequest } from "../middleware/auth";
 
 export async function loginAdmin(req: Request, res: Response) {
   try {
@@ -36,6 +37,26 @@ export async function loginAdmin(req: Request, res: Response) {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error logging in admin:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function getAdminMe(req: AuthenticatedRequest, res: Response) {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized." });
+    }
+
+    const admin = await findAdminById(userId);
+    if (!admin) {
+      return res.status(404).json({ message: "Admin not found." });
+    }
+
+    return res.status(200).json({ admin });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching admin details:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
