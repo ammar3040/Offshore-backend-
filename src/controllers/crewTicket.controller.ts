@@ -1020,12 +1020,18 @@ export async function searchFlightsController(req: import("express").Request, re
       const outResults = transformRiyaResponse(outboundData || {}, fromData.code, toData.code);
       const inResults = transformRiyaResponse(inboundData || {}, toData.code, fromData.code);
 
+      // Apply admin logic to each leg separately, then combine (flat markup per direction)
+      const outWithAdmin = applyAdminLogic(outResults);
+      const inWithAdmin = applyAdminLogic(inResults);
+
       const results: any[] = [];
-      const minLen = Math.min(outResults.length, inResults.length);
+      const minLen = Math.min(outWithAdmin.length, inWithAdmin.length);
       for (let i = 0; i < minLen; i++) {
-        const o = outResults[i];
-        const r = inResults[i];
-        if (!o || !r) continue;
+        const o = outWithAdmin[i];
+        const r = inWithAdmin[i];
+        const oRaw = outResults[i];
+        const rRaw = inResults[i];
+        if (!o || !r || !oRaw || !rRaw) continue;
 
         results.push({
           ...o,
@@ -1035,23 +1041,25 @@ export async function searchFlightsController(req: import("express").Request, re
             const rFare = r.fares[fIdx] ?? r.fares[0];
             return {
               ...f,
+              price: (f.price ?? 0) + (rFare.price ?? 0),
+              markup: (f.markup ?? 0) + (rFare.markup ?? 0),
               totalFare: f.totalFare + rFare.totalFare,
               basicFare: f.basicFare + rFare.basicFare,
             };
           }),
           fareBreakdown: {
-            total: o.fareBreakdown.total + r.fareBreakdown.total,
-            base: o.fareBreakdown.base + r.fareBreakdown.base,
-            tax: o.fareBreakdown.tax + r.fareBreakdown.tax,
-            serviceFee: o.fareBreakdown.serviceFee + r.fareBreakdown.serviceFee,
-            gst: o.fareBreakdown.gst + r.fareBreakdown.gst,
+            total: oRaw.fareBreakdown.total + rRaw.fareBreakdown.total,
+            base: oRaw.fareBreakdown.base + rRaw.fareBreakdown.base,
+            tax: oRaw.fareBreakdown.tax + rRaw.fareBreakdown.tax,
+            serviceFee: oRaw.fareBreakdown.serviceFee + rRaw.fareBreakdown.serviceFee,
+            gst: oRaw.fareBreakdown.gst + rRaw.fareBreakdown.gst,
           },
           airlineName: o.legs[0]?.airlineName,
           airlineCode: o.legs[0]?.airlineCode,
           stops: o.stops + r.stops,
         });
       }
-      const flights = applyAdminLogic(results);
+      const flights = results;
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
       const startIndex = (page - 1) * limit;
