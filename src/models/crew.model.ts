@@ -22,6 +22,12 @@ export interface Identity {
   identity_document: string;
 }
 
+export interface CrewCertificate {
+  issue_date: string;
+  expiry_date: string;
+  certificate_document: string;
+}
+
 export interface Crew {
   id: string;
   firstname: string;
@@ -39,6 +45,14 @@ export interface Crew {
   password: string; // hashed
   passport: Passport;
   identity: Identity;
+  crew_certificate: CrewCertificate;
+  azerbaijan_vantage_number?: string;
+  norwegian_d_number?: string;
+  dawinci_number?: string;
+  vantage_number?: string;
+  organization?: string;
+  linkedin?: string;
+  visa?: string;
 }
 
 // Mongoose document type (has _id)
@@ -68,6 +82,15 @@ const identitySchema = new Schema<Identity>(
   { _id: false }
 );
 
+const crewCertificateSchema = new Schema<CrewCertificate>(
+  {
+    issue_date: { type: String, required: true },
+    expiry_date: { type: String, required: true },
+    certificate_document: { type: String, required: true },
+  },
+  { _id: false }
+);
+
 const crewSchema = new Schema<CrewDocument>(
   {
     firstname: { type: String, required: true },
@@ -85,6 +108,14 @@ const crewSchema = new Schema<CrewDocument>(
     password: { type: String, required: true, select: false },
     passport: { type: passportSchema, required: true },
     identity: { type: identitySchema, required: true },
+    crew_certificate: { type: crewCertificateSchema, required: true },
+    azerbaijan_vantage_number: { type: String },
+    norwegian_d_number: { type: String },
+    dawinci_number: { type: String },
+    vantage_number: { type: String },
+    organization: { type: String },
+    linkedin: { type: String },
+    visa: { type: String },
   },
   { timestamps: true }
 );
@@ -112,6 +143,14 @@ function toCrew(doc: CrewDocument): CrewPublic {
     postal_code: doc.postal_code,
     passport: doc.passport,
     identity: doc.identity,
+    crew_certificate: doc.crew_certificate,
+    azerbaijan_vantage_number: doc.azerbaijan_vantage_number,
+    norwegian_d_number: doc.norwegian_d_number,
+    dawinci_number: doc.dawinci_number,
+    vantage_number: doc.vantage_number,
+    organization: doc.organization,
+    linkedin: doc.linkedin,
+    visa: doc.visa,
   };
 }
 

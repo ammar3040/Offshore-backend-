@@ -7,6 +7,7 @@ import cloudinary, {
 interface CrewFormFiles {
   passport_document?: Express.Multer.File[];
   identity_document?: Express.Multer.File[];
+  certificate_document?: Express.Multer.File[];
 }
 
 export async function uploadCrewFilesToCloudinary(
@@ -15,7 +16,7 @@ export async function uploadCrewFilesToCloudinary(
   next: NextFunction
 ) {
   const files = req.files;
-  if (!files?.passport_document?.[0] || !files?.identity_document?.[0]) {
+  if (!files?.passport_document?.[0] || !files?.identity_document?.[0] || !files?.certificate_document?.[0]) {
     return next();
   }
 
@@ -30,9 +31,10 @@ export async function uploadCrewFilesToCloudinary(
   }
 
   try {
-    const [passportFile, identityFile] = [
+    const [passportFile, identityFile, certificateFile] = [
       files.passport_document[0],
       files.identity_document[0],
+      files.certificate_document[0],
     ];
 
     const uploadFile = async (
@@ -48,13 +50,15 @@ export async function uploadCrewFilesToCloudinary(
       return result.secure_url;
     };
 
-    const [passportUrl, identityUrl] = await Promise.all([
+    const [passportUrl, identityUrl, certificateUrl] = await Promise.all([
       uploadFile(passportFile, `${CLOUDINARY_CREW_FOLDER}/passport`),
       uploadFile(identityFile, `${CLOUDINARY_CREW_FOLDER}/identity`),
+      uploadFile(certificateFile, `${CLOUDINARY_CREW_FOLDER}/certificate`),
     ]);
 
     (passportFile as Express.Multer.File & { path?: string }).path = passportUrl;
     (identityFile as Express.Multer.File & { path?: string }).path = identityUrl;
+    (certificateFile as Express.Multer.File & { path?: string }).path = certificateUrl;
 
     next();
   } catch (error) {

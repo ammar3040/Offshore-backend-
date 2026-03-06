@@ -55,6 +55,11 @@ const IDENTITY_FIELDS = [
   "identity_expiry_date",
 ] as const;
 
+const CERTIFICATE_FIELDS = [
+  "certificate_issue_date",
+  "certificate_expiry_date",
+] as const;
+
 function getString(body: Record<string, unknown>, key: string): string | undefined {
   const v = body[key];
   return typeof v === "string" ? v : undefined;
@@ -62,7 +67,7 @@ function getString(body: Record<string, unknown>, key: string): string | undefin
 
 function hasRequiredFormFields(
   body: Record<string, unknown>,
-  files: { passport_document?: Express.Multer.File[]; identity_document?: Express.Multer.File[] }
+  files: { passport_document?: Express.Multer.File[]; identity_document?: Express.Multer.File[]; certificate_document?: Express.Multer.File[] }
 ): { ok: true; data: CrewFormPayload } | { ok: false; message: string } {
   for (const key of FLAT_FIELDS) {
     if (!getString(body, key)) {
@@ -79,6 +84,11 @@ function hasRequiredFormFields(
       return { ok: false, message: `Missing or invalid field: ${key}` };
     }
   }
+  for (const key of CERTIFICATE_FIELDS) {
+    if (!getString(body, key)) {
+      return { ok: false, message: `Missing or invalid field: ${key}` };
+    }
+  }
   const identityType = getString(body, "identity_type") as IdentityType | undefined;
   if (!identityType || !Object.values(IdentityType).includes(identityType)) {
     return { ok: false, message: "identity_type must be one of: national_id, driving_license, identity_number" };
@@ -89,11 +99,15 @@ function hasRequiredFormFields(
   // }
   const passportFile = files.passport_document?.[0];
   const identityFile = files.identity_document?.[0];
+  const certificateFile = files.certificate_document?.[0];
   if (!passportFile?.path) {
     return { ok: false, message: "passport_document file is required" };
   }
   if (!identityFile?.path) {
     return { ok: false, message: "identity_document file is required" };
+  }
+  if (!certificateFile?.path) {
+    return { ok: false, message: "certificate_document file is required" };
   }
 
   const data: CrewFormPayload = {
@@ -123,6 +137,18 @@ function hasRequiredFormFields(
       expiry_date: getString(body, "identity_expiry_date")!,
       identity_document: identityFile.path,
     },
+    crew_certificate: {
+      issue_date: getString(body, "certificate_issue_date")!,
+      expiry_date: getString(body, "certificate_expiry_date")!,
+      certificate_document: certificateFile.path,
+    },
+    azerbaijan_vantage_number: getString(body, "azerbaijan_vantage_number"),
+    norwegian_d_number: getString(body, "norwegian_d_number"),
+    dawinci_number: getString(body, "dawinci_number"),
+    vantage_number: getString(body, "vantage_number"),
+    organization: getString(body, "organization"),
+    linkedin: getString(body, "linkedin"),
+    visa: getString(body, "visa"),
   };
   return { ok: true, data };
 }
@@ -130,6 +156,7 @@ function hasRequiredFormFields(
 interface CrewFormFiles {
   passport_document?: Express.Multer.File[];
   identity_document?: Express.Multer.File[];
+  certificate_document?: Express.Multer.File[];
 }
 
 function generateAlphanumericPassword(length = 12): string {
