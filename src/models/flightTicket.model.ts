@@ -21,7 +21,7 @@ export interface FlightTicket {
   currency: string;
   fareTypes: string[];
 }
-// deployment fix
+// deployment fix 1
 
 export interface FlightTicketDocument extends Omit<FlightTicket, "id">, Document {
   _id: mongoose.Types.ObjectId;
