@@ -142,3 +142,19 @@ export async function acceptCrewInvite(
   ).populate("crew_id project_id");
   return doc ? toCrewInvite(doc) : null;
 }
+
+/** Reject/unassign crew from project. Used when removing crew from assigned project. */
+export async function rejectCrewInvite(
+  crewId: string,
+  projectId: string
+): Promise<CrewInvite | null> {
+  if (!mongoose.Types.ObjectId.isValid(crewId) || !mongoose.Types.ObjectId.isValid(projectId)) {
+    return null;
+  }
+  const doc = await CrewInviteModel.findOneAndUpdate(
+    { crew_id: new mongoose.Types.ObjectId(crewId), project_id: new mongoose.Types.ObjectId(projectId) },
+    { acceptanceStatus: AcceptanceStatus.Rejected },
+    { new: true }
+  ).populate("crew_id project_id");
+  return doc ? toCrewInvite(doc) : null;
+}

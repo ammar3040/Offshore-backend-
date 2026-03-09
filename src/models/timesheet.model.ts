@@ -107,6 +107,20 @@ export async function findTimesheetsByCrew(
  * Entries are empty; the daily worker marks PRESENT for each day as it occurs.
  * Idempotent: returns existing timesheet if one already exists.
  */
+export async function deleteTimesheetByCrewAndProject(
+  crewId: string | mongoose.Types.ObjectId,
+  projectId: string | mongoose.Types.ObjectId
+): Promise<boolean> {
+  if (!mongoose.Types.ObjectId.isValid(crewId) || !mongoose.Types.ObjectId.isValid(projectId)) {
+    return false;
+  }
+  const result = await TimesheetModel.deleteOne({
+    crew_id: new mongoose.Types.ObjectId(crewId),
+    project_id: new mongoose.Types.ObjectId(projectId),
+  });
+  return (result.deletedCount ?? 0) > 0;
+}
+
 export async function createTimesheetForCrewProject(
   crewId: mongoose.Types.ObjectId,
   projectId: mongoose.Types.ObjectId,

@@ -209,6 +209,26 @@ export async function updateCrewPassword(id: string, hashedPassword: string): Pr
   return doc ? toCrew(doc) : null;
 }
 
+/** Partial update of crew fields (excludes password). */
+export async function updateCrew(
+  id: string,
+  data: Partial<Omit<Crew, "id" | "password">>
+): Promise<CrewPublic | null> {
+  if (!mongoose.Types.ObjectId.isValid(id)) return null;
+  const update = { ...data } as Record<string, unknown>;
+  delete update.password;
+  delete update.id;
+  if (Object.keys(update).length === 0) return findCrewById(id);
+  const doc = await CrewModel.findByIdAndUpdate(id, { $set: update }, { new: true });
+  return doc ? toCrew(doc) : null;
+}
+
+export async function deleteCrew(id: string): Promise<boolean> {
+  if (!mongoose.Types.ObjectId.isValid(id)) return false;
+  const result = await CrewModel.findByIdAndDelete(id);
+  return !!result;
+}
+
 export async function countCrew(): Promise<number> {
   return CrewModel.countDocuments();
 }

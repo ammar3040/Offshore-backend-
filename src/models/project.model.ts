@@ -153,3 +153,14 @@ export async function countActiveAdmins(): Promise<number> {
   const adminIds = await ProjectModel.distinct("createdBy");
   return adminIds.length;
 }
+
+/** Find projects where the given crew is a participant. */
+export async function findProjectsByParticipantCrewId(crewId: string): Promise<Project[]> {
+  if (!mongoose.Types.ObjectId.isValid(crewId)) return [];
+  const crewObjectId = new mongoose.Types.ObjectId(crewId);
+  const docs = await ProjectModel.find({ participants: crewObjectId })
+    .sort({ createdAt: -1 })
+    .populate("participants")
+    .populate("createdBy");
+  return docs.map((doc) => toProject(doc));
+}
