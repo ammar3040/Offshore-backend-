@@ -66,10 +66,23 @@ export const crewIdParamSchema = Joi.object({
   }),
 });
 
-/** For POST /search-flights - pagination params */
+/** Time format HH:mm, date format YYYY-MM-DD */
+const timePattern = /^\d{2}:\d{2}$/;
+const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+
+/** For POST /search-flights - pagination params + time filters */
 export const searchFlightsSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
+  departureTime: Joi.string().pattern(timePattern).optional().messages({
+    "string.pattern.base": "departureTime must be HH:mm (e.g. 10:30)",
+  }),
+  arrivalDate: Joi.string().pattern(datePattern).optional().messages({
+    "string.pattern.base": "arrivalDate must be YYYY-MM-DD",
+  }),
+  arrivalTime: Joi.string().pattern(timePattern).optional().messages({
+    "string.pattern.base": "arrivalTime must be HH:mm (e.g. 18:45)",
+  }),
 }).unknown(true);
 
 /** For POST /book - pass selected flight from search response (Option 1) */

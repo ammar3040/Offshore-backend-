@@ -904,6 +904,9 @@ export async function searchFlightsController(req: import("express").Request, re
       crew_ids,
       page = 1,
       limit = 20,
+      departureTime: filterDepartureTime,
+      arrivalDate: filterArrivalDate,
+      arrivalTime: filterArrivalTime,
     } = body;
 
     const crewIdsArray = Array.isArray(crew_ids) ? crew_ids : [];
@@ -987,6 +990,28 @@ export async function searchFlightsController(req: import("express").Request, re
     const formattedReturnDate =
       tripType === "round-trip" && returnDate ? `${returnDate}T00:00:00` : "0001-01-01T00:00:00";
 
+    const hasTimeFilters = filterDepartureTime || filterArrivalDate || filterArrivalTime;
+
+    const parseDateTime = (isoStr: string) => {
+      const match = String(isoStr || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/);
+      return match ? { date: match[1], time: `${match[2]}:${match[3]}` } : null;
+    };
+
+    const matchesTimeFilters = (flight: any) => {
+      if (!hasTimeFilters) return true;
+      const firstLeg = flight?.legs?.[0];
+      if (!firstLeg) return true;
+
+      const dep = parseDateTime(firstLeg.departureTime);
+      const arr = parseDateTime(firstLeg.arrivalTime);
+      if (!dep || !arr) return true;
+
+      if (filterDepartureTime && dep.time < filterDepartureTime) return false;
+      if (filterArrivalDate && arr.date !== filterArrivalDate) return false;
+      if (filterArrivalTime && arr.time > filterArrivalTime) return false;
+      return true;
+    };
+
     const opts = { adults, children, infants, cabinClass, currency, sector };
 
     if (tripType === "round-trip") {
@@ -1059,7 +1084,7 @@ export async function searchFlightsController(req: import("express").Request, re
           stops: o.stops + r.stops,
         });
       }
-      const flights = results;
+      const flights = results.filter(matchesTimeFilters);
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
       const startIndex = (page - 1) * limit;
@@ -1084,7 +1109,7 @@ export async function searchFlightsController(req: import("express").Request, re
         )
       );
       const transformedData = transformRiyaResponse(data || {}, fromData.code, toData.code);
-      const flights = applyAdminLogic(transformedData);
+      const flights = applyAdminLogic(transformedData).filter(matchesTimeFilters);
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
       const startIndex = (page - 1) * limit;
