@@ -16,7 +16,12 @@ export async function uploadCrewFilesToCloudinary(
   next: NextFunction
 ) {
   const files = req.files;
-  if (!files?.passport_document?.[0] || !files?.identity_document?.[0] || !files?.certificate_document?.[0]) {
+  const hasPassport = files?.passport_document?.[0];
+  const hasIdentity = files?.identity_document?.[0];
+  const certificateFiles = files?.certificate_document ?? [];
+  const hasCertificates = certificateFiles.length > 0;
+
+  if (!hasPassport || !hasIdentity || !hasCertificates) {
     return next();
   }
 
@@ -31,11 +36,8 @@ export async function uploadCrewFilesToCloudinary(
   }
 
   try {
-    const [passportFile, identityFile, certificateFile] = [
-      files.passport_document[0],
-      files.identity_document[0],
-      files.certificate_document[0],
-    ];
+    const passportFile = files!.passport_document![0];
+    const identityFile = files!.identity_document![0];
 
     const uploadFile = async (
       file: Express.Multer.File,
@@ -50,15 +52,21 @@ export async function uploadCrewFilesToCloudinary(
       return result.secure_url;
     };
 
-    const [passportUrl, identityUrl, certificateUrl] = await Promise.all([
+    const certUploads = certificateFiles.map((file) =>
+      uploadFile(file, `${CLOUDINARY_CREW_FOLDER}/certificate`)
+    );
+
+    const [passportUrl, identityUrl, ...certificateUrls] = await Promise.all([
       uploadFile(passportFile, `${CLOUDINARY_CREW_FOLDER}/passport`),
       uploadFile(identityFile, `${CLOUDINARY_CREW_FOLDER}/identity`),
-      uploadFile(certificateFile, `${CLOUDINARY_CREW_FOLDER}/certificate`),
+      ...certUploads,
     ]);
 
     (passportFile as Express.Multer.File & { path?: string }).path = passportUrl;
     (identityFile as Express.Multer.File & { path?: string }).path = identityUrl;
-    (certificateFile as Express.Multer.File & { path?: string }).path = certificateUrl;
+    certificateFiles.forEach((file, i) => {
+      (file as Express.Multer.File & { path?: string }).path = certificateUrls[i];
+    });
 
     next();
   } catch (error) {
@@ -79,9 +87,10 @@ export async function uploadCrewFilesToCloudinaryOptional(
   const files = req.files;
   const passportFile = files?.passport_document?.[0];
   const identityFile = files?.identity_document?.[0];
-  const certificateFile = files?.certificate_document?.[0];
+  const certificateFiles = files?.certificate_document ?? [];
+  const hasCertificateFiles = certificateFiles.length > 0;
 
-  if (!passportFile && !identityFile && !certificateFile) {
+  if (!passportFile && !identityFile && !hasCertificateFiles) {
     return next();
   }
 
@@ -129,7 +138,7 @@ export async function uploadCrewFilesToCloudinaryOptional(
         )
       );
     }
-    if (certificateFile) {
+    for (const certificateFile of certificateFiles) {
       uploads.push(
         uploadFile(certificateFile, `${CLOUDINARY_CREW_FOLDER}/certificate`).then(
           (url) => {

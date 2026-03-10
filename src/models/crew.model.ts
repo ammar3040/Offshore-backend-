@@ -23,6 +23,7 @@ export interface Identity {
 }
 
 export interface CrewCertificate {
+  certificate_name: string;
   issue_date: string;
   expiry_date: string;
   certificate_document: string;
@@ -45,7 +46,7 @@ export interface Crew {
   password: string; // hashed
   passport: Passport;
   identity: Identity;
-  crew_certificate: CrewCertificate;
+  crew_certificate: CrewCertificate[];
   azerbaijan_vantage_number?: string;
   norwegian_d_number?: string;
   dawinci_number?: string;
@@ -84,6 +85,7 @@ const identitySchema = new Schema<Identity>(
 
 const crewCertificateSchema = new Schema<CrewCertificate>(
   {
+    certificate_name: { type: String, required: true },
     issue_date: { type: String, required: true },
     expiry_date: { type: String, required: true },
     certificate_document: { type: String, required: true },
@@ -108,7 +110,7 @@ const crewSchema = new Schema<CrewDocument>(
     password: { type: String, required: true, select: false },
     passport: { type: passportSchema, required: true },
     identity: { type: identitySchema, required: true },
-    crew_certificate: { type: crewCertificateSchema, required: true },
+    crew_certificate: { type: [crewCertificateSchema], default: [] },
     azerbaijan_vantage_number: { type: String },
     norwegian_d_number: { type: String },
     dawinci_number: { type: String },
@@ -125,6 +127,24 @@ const CrewModel: Model<CrewDocument> =
 
 /** Crew without password - safe for API responses */
 export type CrewPublic = Omit<Crew, "password">;
+
+function normalizeCrewCertificates(
+  raw: CrewDocument["crew_certificate"]
+): CrewCertificate[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  // Backward compat: old format was single object without certificate_name
+  const old = raw as unknown as { issue_date?: string; expiry_date?: string; certificate_document?: string };
+  if (old?.issue_date != null && old?.expiry_date != null && old?.certificate_document != null) {
+    return [{
+      certificate_name: "Certificate",
+      issue_date: old.issue_date,
+      expiry_date: old.expiry_date,
+      certificate_document: old.certificate_document,
+    }];
+  }
+  return [];
+}
 
 function toCrew(doc: CrewDocument): CrewPublic {
   return {
@@ -143,7 +163,7 @@ function toCrew(doc: CrewDocument): CrewPublic {
     postal_code: doc.postal_code,
     passport: doc.passport,
     identity: doc.identity,
-    crew_certificate: doc.crew_certificate,
+    crew_certificate: normalizeCrewCertificates(doc.crew_certificate),
     azerbaijan_vantage_number: doc.azerbaijan_vantage_number,
     norwegian_d_number: doc.norwegian_d_number,
     dawinci_number: doc.dawinci_number,

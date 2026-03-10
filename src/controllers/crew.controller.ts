@@ -64,6 +64,7 @@ const IDENTITY_FIELDS = [
 ] as const;
 
 const CERTIFICATE_FIELDS = [
+  "certificate_name",
   "certificate_issue_date",
   "certificate_expiry_date",
 ] as const;
@@ -107,15 +108,51 @@ function hasRequiredFormFields(
   // }
   const passportFile = files.passport_document?.[0];
   const identityFile = files.identity_document?.[0];
-  const certificateFile = files.certificate_document?.[0];
+  const certificateFiles = files.certificate_document ?? [];
   if (!passportFile?.path) {
     return { ok: false, message: "passport_document file is required" };
   }
   if (!identityFile?.path) {
     return { ok: false, message: "identity_document file is required" };
   }
-  if (!certificateFile?.path) {
-    return { ok: false, message: "certificate_document file is required" };
+  if (certificateFiles.length === 0 || !certificateFiles[0]?.path) {
+    return { ok: false, message: "At least one certificate_document file is required" };
+  }
+
+  // Build certificates array: use "certificates" JSON if provided, else single cert from flat fields
+  let crewCertificates: Array<{ certificate_name: string; issue_date: string; expiry_date: string; certificate_document: string }>;
+  const certificatesJson = getString(body, "certificates");
+  if (certificatesJson) {
+    try {
+      const parsed = JSON.parse(certificatesJson) as Array<{ certificate_name: string; issue_date: string; expiry_date: string }>;
+      if (!Array.isArray(parsed) || parsed.length !== certificateFiles.length) {
+        return { ok: false, message: "certificates array length must match number of certificate_document files" };
+      }
+      crewCertificates = parsed.map((cert, i) => ({
+        certificate_name: cert.certificate_name || "",
+        issue_date: cert.issue_date,
+        expiry_date: cert.expiry_date,
+        certificate_document: certificateFiles[i]!.path!,
+      }));
+    } catch {
+      return { ok: false, message: "certificates must be a valid JSON array" };
+    }
+  } else {
+    if (certificateFiles.length > 1) {
+      return { ok: false, message: "For multiple certificates, send 'certificates' as JSON array with certificate_name, issue_date, expiry_date for each" };
+    }
+    const certName = getString(body, "certificate_name");
+    const certIssue = getString(body, "certificate_issue_date");
+    const certExpiry = getString(body, "certificate_expiry_date");
+    if (!certName || !certIssue || !certExpiry) {
+      return { ok: false, message: "certificate_name, certificate_issue_date, certificate_expiry_date are required" };
+    }
+    crewCertificates = [{
+      certificate_name: certName,
+      issue_date: certIssue,
+      expiry_date: certExpiry,
+      certificate_document: certificateFiles[0]!.path!,
+    }];
   }
 
   const data: CrewFormPayload = {
@@ -145,11 +182,7 @@ function hasRequiredFormFields(
       expiry_date: getString(body, "identity_expiry_date")!,
       identity_document: identityFile.path,
     },
-    crew_certificate: {
-      issue_date: getString(body, "certificate_issue_date")!,
-      expiry_date: getString(body, "certificate_expiry_date")!,
-      certificate_document: certificateFile.path,
-    },
+    crew_certificate: crewCertificates,
     azerbaijan_vantage_number: getString(body, "azerbaijan_vantage_number"),
     norwegian_d_number: getString(body, "norwegian_d_number"),
     dawinci_number: getString(body, "dawinci_number"),
@@ -434,7 +467,6 @@ function buildCrewUpdateFromForm(
 
   const passportDoc = files.passport_document?.[0] as (Express.Multer.File & { path?: string }) | undefined;
   const identityDoc = files.identity_document?.[0] as (Express.Multer.File & { path?: string }) | undefined;
-  const certDoc = files.certificate_document?.[0] as (Express.Multer.File & { path?: string }) | undefined;
 
   const passportFields: Record<string, string> = {};
   if (getString(body, "passport_number")) passportFields.passport_number = getString(body, "passport_number")!;
@@ -452,11 +484,43 @@ function buildCrewUpdateFromForm(
   if (identityDoc?.path) identityFields.identity_document = identityDoc.path;
   if (Object.keys(identityFields).length > 0) update.identity = identityFields;
 
-  const certFields: Record<string, string> = {};
-  if (getString(body, "certificate_issue_date")) certFields.issue_date = getString(body, "certificate_issue_date")!;
-  if (getString(body, "certificate_expiry_date")) certFields.expiry_date = getString(body, "certificate_expiry_date")!;
-  if (certDoc?.path) certFields.certificate_document = certDoc.path;
-  if (Object.keys(certFields).length > 0) update.crew_certificate = certFields;
+  const certName = getString(body, "certificate_name");
+  const certIssue = getString(body, "certificate_issue_date");
+  const certExpiry = getString(body, "certificate_expiry_date");
+  const certDocs = files?.certificate_document ?? [];
+  if ((certName || certIssue || certExpiry || certDocs.length > 0) && certName && certIssue && certExpiry && certDocs.length > 0) {
+    const certificatesJson = getString(body, "certificates");
+    let newCerts: Array<{ certificate_name: string; issue_date: string; expiry_date: string; certificate_document: string }>;
+    if (certificatesJson) {
+      try {
+        const parsed = JSON.parse(certificatesJson) as Array<{ certificate_name: string; issue_date: string; expiry_date: string }>;
+        if (!Array.isArray(parsed) || parsed.length !== certDocs.length) {
+          return update as Partial<Omit<Crew, "id" | "password">>;
+        }
+        newCerts = parsed.map((c, i) => ({
+          certificate_name: c.certificate_name || "",
+          issue_date: c.issue_date,
+          expiry_date: c.expiry_date,
+          certificate_document: (certDocs[i] as Express.Multer.File & { path?: string })?.path ?? "",
+        })).filter((c) => c.certificate_document);
+      } catch {
+        return update as Partial<Omit<Crew, "id" | "password">>;
+      }
+    } else {
+      if (certDocs.length > 1) {
+        return update as Partial<Omit<Crew, "id" | "password">>;
+      }
+      const path = (certDocs[0] as Express.Multer.File & { path?: string })?.path;
+      if (path) {
+        newCerts = [{ certificate_name: certName!, issue_date: certIssue!, expiry_date: certExpiry!, certificate_document: path }];
+      } else {
+        return update as Partial<Omit<Crew, "id" | "password">>;
+      }
+    }
+    if (newCerts.length > 0) {
+      update.crew_certificate_add = newCerts;
+    }
+  }
 
   for (const key of ["azerbaijan_vantage_number", "norwegian_d_number", "dawinci_number", "vantage_number", "organization", "linkedin", "visa"]) {
     const v = getString(body, key);
@@ -503,14 +567,10 @@ export async function patchCrew(
             crew.identity.identity_document,
         };
       }
-      if (formUpdate.crew_certificate) {
-        formUpdate.crew_certificate = {
-          ...crew.crew_certificate,
-          ...formUpdate.crew_certificate,
-          certificate_document:
-            (formUpdate.crew_certificate as { certificate_document?: string }).certificate_document ||
-            crew.crew_certificate.certificate_document,
-        };
+      const certsToAdd = (formUpdate as { crew_certificate_add?: Array<{ certificate_name: string; issue_date: string; expiry_date: string; certificate_document: string }> }).crew_certificate_add;
+      if (certsToAdd?.length) {
+        formUpdate.crew_certificate = [...(crew.crew_certificate || []), ...certsToAdd];
+        delete (formUpdate as Record<string, unknown>).crew_certificate_add;
       }
       updateData = formUpdate;
     } else {

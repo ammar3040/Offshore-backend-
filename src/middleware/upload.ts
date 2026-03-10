@@ -8,7 +8,7 @@ export const crewUpload = multer({
 }).fields([
   { name: "passport_document", maxCount: 1 },
   { name: "identity_document", maxCount: 1 },
-  { name: "certificate_document", maxCount: 1 },
+  { name: "certificate_document", maxCount: 50 },
 ]);
 
 /** Single PDF file for crew ticket upload - field name "pdf" */
