@@ -93,9 +93,13 @@ function hasRequiredFormFields(
       return { ok: false, message: `Missing or invalid field: ${key}` };
     }
   }
-  for (const key of CERTIFICATE_FIELDS) {
-    if (!getString(body, key)) {
-      return { ok: false, message: `Missing or invalid field: ${key}` };
+  const certificatesJson = getString(body, "certificates");
+  const hasCertificatesArray = certificatesJson && certificatesJson.trim().length > 0;
+  if (!hasCertificatesArray) {
+    for (const key of CERTIFICATE_FIELDS) {
+      if (!getString(body, key)) {
+        return { ok: false, message: `Missing or invalid field: ${key}` };
+      }
     }
   }
   const identityType = getString(body, "identity_type") as IdentityType | undefined;
@@ -121,7 +125,6 @@ function hasRequiredFormFields(
 
   // Build certificates array: use "certificates" JSON if provided, else single cert from flat fields
   let crewCertificates: Array<{ certificate_name: string; issue_date: string; expiry_date: string; certificate_document: string }>;
-  const certificatesJson = getString(body, "certificates");
   if (certificatesJson) {
     try {
       const parsed = JSON.parse(certificatesJson) as Array<{ certificate_name: string; issue_date: string; expiry_date: string }>;
