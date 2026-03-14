@@ -21,6 +21,7 @@ import { getAdminSettings } from "../lib/admin-settings";
 import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { sendFlightTicketEmail, type FlightTicketData } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
+import { fetchRiyaGetcity, normalizeRiyaAirports } from "../lib/riya-airports";
 
 export async function getCrewTickets(_req: import("express").Request, res: Response) {
   try {
@@ -1170,7 +1171,18 @@ export async function searchFlightsController(req: import("express").Request, re
   }
 }
 
-/** Country code (ISO 3166-1 alpha-2) to country name mapping */
+export interface AirportSearchResult {
+  Name: string;
+  Code: string;
+  CountryCode: string;
+  CountryName: string;
+  /** @deprecated Use CountryCode */
+  COUNTRY?: string;
+  /** @deprecated Use CountryName */
+  COUNTRYNAME?: string;
+}
+
+/** Fallback when Riya returns no data (login/session issues) */
 const COUNTRY_NAMES: Record<string, string> = {
   IN: "India", US: "United States", GB: "United Kingdom", AE: "United Arab Emirates",
   FR: "France", DE: "Germany", NL: "Netherlands", SG: "Singapore", AU: "Australia",
@@ -1179,10 +1191,20 @@ const COUNTRY_NAMES: Record<string, string> = {
   ID: "Indonesia", NO: "Norway", ES: "Spain", IT: "Italy", SA: "Saudi Arabia",
 };
 
-export interface AirportSearchResult {
-  Name: string;
-  COUNTRY: string;
-  COUNTRYNAME: string;
+async function fetchAirportsFallback(query: string): Promise<AirportSearchResult[]> {
+  const res = await fetch(
+    `https://www.airportroutes.com/api/search-airports/?q=${encodeURIComponent(query)}&limit=20`
+  );
+  if (!res.ok) return [];
+  const data = (await res.json()) as { hits?: Array<{ name: string; city: string; iata: string; icao: string; country_code: string }> };
+  const hits = data.hits ?? [];
+  return hits.map((hit) => {
+    const code = hit.iata || hit.icao || "";
+    const countryCode = hit.country_code || "";
+    const countryName = COUNTRY_NAMES[countryCode] || countryCode;
+    const name = `${hit.city} [${code}] - ${hit.name}, ${countryName}`;
+    return { Name: name, Code: code, CountryCode: countryCode, CountryName: countryName, COUNTRY: countryCode, COUNTRYNAME: countryName };
+  });
 }
 
 export async function searchAirports(req: import("express").Request, res: Response) {
@@ -1191,25 +1213,42 @@ export async function searchAirports(req: import("express").Request, res: Respon
     if (!query || query.length < 2) {
       return res.status(400).json({ message: "Query must be at least 2 characters." });
     }
+    const { statusCode, data } = await fetchRiyaGetcity(query);
 
-    const response = await fetch(
-      `https://www.airportroutes.com/api/search-airports/?q=${encodeURIComponent(query)}&limit=20`
-    );
-
-    if (!response.ok) {
-      return res.status(502).json({ message: "Failed to fetch airports from external service." });
+    if (statusCode && statusCode >= 400) {
+      return res.status(502).json({ message: "Failed to fetch airports from Riya." });
     }
 
-    const data = (await response.json()) as { hits?: Array<{ name: string; city: string; iata: string; icao: string; country_code: string }> };
-    const hits = data.hits ?? [];
+    let items = normalizeRiyaAirports(data);
 
-    const airports: AirportSearchResult[] = hits.map((hit) => {
-      const code = hit.iata || hit.icao || "";
-      const countryCode = hit.country_code || "";
-      const countryName = COUNTRY_NAMES[countryCode] || countryCode;
-      const name = `${hit.city} [${code}] - ${hit.name}, ${countryName}`;
+    if (items.length === 0) {
+      items = (await fetchAirportsFallback(query)).map((a) => ({
+        Name: a.Name,
+        Code: a.Code,
+        COUNTRY: a.CountryCode,
+        COUNTRYNAME: a.CountryName,
+        CountryCode: a.CountryCode,
+        CountryName: a.CountryName,
+      }));
+    }
+
+    const airports: AirportSearchResult[] = items.map((item) => {
+      let name = item.Name ?? "";
+      let code = item.Code ?? "";
+      const countryCode = item.COUNTRY ?? item.CountryCode ?? "";
+      const countryName = item.COUNTRYNAME ?? item.CountryName ?? "";
+
+      // Extract code from "City [CODE]" format if not present
+      if (!code && name) {
+        const match = name.match(/\s*\[([A-Z0-9]{3})\]\s*$/);
+        if (match) code = match[1];
+      }
+
       return {
         Name: name,
+        Code: code,
+        CountryCode: countryCode,
+        CountryName: countryName,
         COUNTRY: countryCode,
         COUNTRYNAME: countryName,
       };
@@ -1219,6 +1258,9 @@ export async function searchAirports(req: import("express").Request, res: Respon
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error searching airports:", error);
-    return res.status(500).json({ message: "Internal server error." });
+    return res.status(500).json({
+      message: "Internal server error.",
+      error: (error as Error).message,
+    });
   }
 }
