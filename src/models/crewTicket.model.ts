@@ -30,6 +30,10 @@ export interface CrewTicket {
   markup: number;
   /** Running balance — cumulative markup across bookings for the project */
   balance: number;
+  /** Price of the ticket */
+  price: number;
+  /** Cashback for this booking */
+  cashback: number;
 }
 
 export interface CrewTicketDocument extends Omit<CrewTicket, "id">, Document {
@@ -67,6 +71,8 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
     pdf: { type: String, required: false },
     markup: { type: Number, required: true, default: 0 },
     balance: { type: Number, required: true, default: 0 },
+    price: { type: Number, required: true, default: 0 },
+    cashback: { type: Number, required: true, default: 0 },
   },
   { timestamps: true }
 );
@@ -91,6 +97,8 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     pdf: doc.pdf,
     markup: doc.markup ?? 0,
     balance: doc.balance ?? 0,
+    price: doc.price ?? 0,
+    cashback: doc.cashback ?? 0,
   };
 }
 

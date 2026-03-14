@@ -78,6 +78,8 @@ export async function postCrewTicket(req: import("express").Request, res: Respon
       children?: number;
       infants?: number;
       trip: string;
+      price?: number;
+      cashback?: number;
     };
 
     if (!mongoose.Types.ObjectId.isValid(body.crew_id)) {
@@ -117,6 +119,8 @@ export async function postCrewTicket(req: import("express").Request, res: Respon
       trip: body.trip as import("../models/crewTicket.model").TripType,
       markup: 0,
       balance: 0,
+      price: body.price ?? 0,
+      cashback: body.cashback ?? 0,
     });
 
     return res.status(201).json({
@@ -169,6 +173,8 @@ export async function patchCrewTicket(
       children: number;
       infants: number;
       trip: TripType;
+      price: number;
+      cashback: number;
     }>;
 
     const updateData: Partial<Omit<import("../models/crewTicket.model").CrewTicket, "id" | "crew_id" | "project_id">> = {};
@@ -179,6 +185,8 @@ export async function patchCrewTicket(
     if (body.children !== undefined) updateData.children = body.children;
     if (body.infants !== undefined) updateData.infants = body.infants;
     if (body.trip !== undefined) updateData.trip = body.trip;
+    if (body.price !== undefined) updateData.price = body.price;
+    if (body.cashback !== undefined) updateData.cashback = body.cashback;
 
     const ticket = await updateCrewTicket(id, updateData);
     if (!ticket) {
@@ -259,6 +267,7 @@ export async function bookFlight(req: import("express").Request, res: Response) 
       infants?: number;
       markup?: number;
       cashback?: number;
+      price?: number;
       originalCurrency?: string;
     };
 
@@ -307,8 +316,10 @@ export async function bookFlight(req: import("express").Request, res: Response) 
 
     const payloadMarkupRaw = body.markup ?? 0;
     const payloadCashbackRaw = body.cashback ?? 0;
+    const payloadPriceRaw = body.price ?? 0;
     const markupGBP = Math.round(convert(payloadMarkupRaw, originalCurrency, "GBP", rates) * 100) / 100;
     const cashbackGBP = Math.round(convert(payloadCashbackRaw, originalCurrency, "GBP", rates) * 100) / 100;
+    const priceGBP = Math.round(convert(payloadPriceRaw, originalCurrency, "GBP", rates) * 100) / 100;
 
     const created: import("../models/crewTicket.model").CrewTicket[] = [];
     const errors: { crew_id: string; message: string }[] = [];
@@ -350,6 +361,8 @@ export async function bookFlight(req: import("express").Request, res: Response) 
         trip,
         markup: markupGBP,
         balance: runningBalance,
+        price: priceGBP,
+        cashback: cashbackGBP,
       });
       created.push(ticket);
     }
@@ -457,6 +470,36 @@ export async function deleteCrewTicketHandler(
   try {
     const { id } = req.params;
     const deleted = await deleteCrewTicket(id);
+    if (!deleted) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+    return res.json({ message: "Crew ticket deleted successfully." });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error deleting crew ticket:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+/** Delete crew ticket by crew_id and ticket_id - superadmin only. Validates ticket belongs to crew. */
+export async function deleteCrewTicketByCrewHandler(
+  req: import("express").Request<{ crew_id: string; ticket_id: string }>,
+  res: Response
+) {
+  try {
+    const { crew_id, ticket_id } = req.params;
+    const ticket = await findCrewTicketById(ticket_id);
+    if (!ticket) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+    const ticketCrewId =
+      typeof ticket.crew_id === "object" && ticket.crew_id && "_id" in (ticket.crew_id as object)
+        ? (ticket.crew_id as { _id: { toString: () => string } })._id.toString()
+        : String(ticket.crew_id);
+    if (ticketCrewId !== crew_id) {
+      return res.status(403).json({ message: "Ticket does not belong to this crew member." });
+    }
+    const deleted = await deleteCrewTicket(ticket_id);
     if (!deleted) {
       return res.status(404).json({ message: "Crew ticket not found." });
     }

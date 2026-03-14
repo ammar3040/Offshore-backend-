@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   deleteCrewHandler,
+  deleteCrewTicketByCrewHandler,
   getCrew,
   getCrewAvailableForProject,
   getCrewById,
@@ -11,7 +12,7 @@ import {
   resetCrewPassword,
   unassignCrewFromProject,
 } from "../controllers";
-import { authenticateAdminOrSuperAdmin, authenticateCrew } from "../middleware/auth";
+import { authenticateAdminOrSuperAdmin, authenticateCrew, authenticateSuperAdmin } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { crewUpload } from "../middleware/upload";
 import {
@@ -21,6 +22,7 @@ import {
 import { projectIdParamSchema } from "../validations/crewInvite.validation";
 import {
   crewAndProjectParamsSchema,
+  crewAndTicketParamsSchema,
   crewIdParamSchema,
 } from "../validations/crew.validation";
 
@@ -63,6 +65,14 @@ router.delete(
   authenticateAdminOrSuperAdmin,
   validate(crewAndProjectParamsSchema, "params"),
   unassignCrewFromProject
+);
+
+// delete crew ticket - superadmin only (validates ticket belongs to crew)
+router.delete(
+  "/:crew_id/ticket/:ticket_id",
+  authenticateSuperAdmin,
+  validate(crewAndTicketParamsSchema, "params"),
+  deleteCrewTicketByCrewHandler
 );
 
 // delete crew (returns 409 with projects list if crew is assigned - frontend shows popup)

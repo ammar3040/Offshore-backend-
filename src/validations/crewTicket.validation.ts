@@ -35,6 +35,8 @@ export const createCrewTicketSchema = Joi.object({
     .messages({
       "any.required": "trip is required",
     }),
+  price: Joi.number().min(0).default(0),
+  cashback: Joi.number().min(0).default(0),
 });
 
 export const updateCrewTicketSchema = Joi.object({
@@ -49,6 +51,8 @@ export const updateCrewTicketSchema = Joi.object({
   trip: Joi.string()
     .valid(...Object.values(TripType))
     .optional(),
+  price: Joi.number().min(0).optional(),
+  cashback: Joi.number().min(0).optional(),
 }).min(1).messages({
   "object.min": "At least one field is required for update",
 });
@@ -131,5 +135,6 @@ export const bookFlightSchema = Joi.object({
   infants: Joi.number().integer().min(0).default(0),
   markup: Joi.number().min(0).default(0),
   cashback: Joi.number().min(0).default(0),
+  price: Joi.number().min(0).default(0),
   originalCurrency: Joi.string().trim().default("INR"),
 });

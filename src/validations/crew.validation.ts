@@ -16,3 +16,12 @@ export const crewAndProjectParamsSchema = Joi.object({
     "any.required": "project_id is required",
   }),
 });
+
+export const crewAndTicketParamsSchema = Joi.object({
+  crew_id: objectId.required().messages({
+    "any.required": "crew_id is required",
+  }),
+  ticket_id: objectId.required().messages({
+    "any.required": "ticket_id is required",
+  }),
+});
