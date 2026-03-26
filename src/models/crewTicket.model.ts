@@ -34,6 +34,10 @@ export interface CrewTicket {
   price: number;
   /** Cashback for this booking */
   cashback: number;
+  /** First leg departure (from search/book payload) — used to detect duplicate bookings */
+  travelStart?: Date;
+  /** Last leg arrival — used with travelStart for duplicate detection */
+  travelEnd?: Date;
 }
 
 export interface CrewTicketDocument extends Omit<CrewTicket, "id">, Document {
@@ -73,11 +77,13 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
     balance: { type: Number, required: true, default: 0 },
     price: { type: Number, required: true, default: 0 },
     cashback: { type: Number, required: true, default: 0 },
+    travelStart: { type: Date, required: false },
+    travelEnd: { type: Date, required: false },
   },
   { timestamps: true }
 );
 
-crewTicketSchema.index({ project_id: 1, crew_id: 1 }, { unique: true });
+crewTicketSchema.index({ project_id: 1, crew_id: 1 });
 
 const CrewTicketModel: Model<CrewTicketDocument> =
   mongoose.models.CrewTicket ?? mongoose.model<CrewTicketDocument>("CrewTicket", crewTicketSchema);
@@ -99,6 +105,8 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     balance: doc.balance ?? 0,
     price: doc.price ?? 0,
     cashback: doc.cashback ?? 0,
+    travelStart: doc.travelStart,
+    travelEnd: doc.travelEnd,
   };
 }
 
@@ -136,6 +144,46 @@ export async function findCrewTicketByProjectAndCrew(
   }
   const doc = await CrewTicketModel.findOne({ project_id: projectId, crew_id: crewId });
   return doc ? toCrewTicket(doc) : null;
+}
+
+/**
+ * For POST /book: conflict if an existing ticket for this crew+project blocks the booking —
+ * legacy row without travel bounds blocks any re-book; otherwise same travel window (start+end) blocks.
+ */
+export async function findCrewTicketBookConflict(
+  projectId: string,
+  crewId: string,
+  travelStart: Date | null,
+  travelEnd: Date | null
+): Promise<CrewTicket | null> {
+  if (!mongoose.Types.ObjectId.isValid(projectId) || !mongoose.Types.ObjectId.isValid(crewId)) {
+    return null;
+  }
+  const docs = await CrewTicketModel.find({ project_id: projectId, crew_id: crewId });
+  for (const doc of docs) {
+    const exStart = doc.travelStart;
+    const exEnd = doc.travelEnd;
+    if (!travelStart || !travelEnd) {
+      return toCrewTicket(doc);
+    }
+    if (exStart == null || exEnd == null) {
+      return toCrewTicket(doc);
+    }
+    if (exStart.getTime() === travelStart.getTime() && exEnd.getTime() === travelEnd.getTime()) {
+      return toCrewTicket(doc);
+    }
+  }
+  return null;
+}
+
+/** Drops legacy unique index on project_id+crew_id if present so multiple trips per crew are allowed. */
+export async function ensureCrewTicketIndexes(): Promise<void> {
+  try {
+    await CrewTicketModel.collection.dropIndex("project_id_1_crew_id_1");
+  } catch {
+    // Index missing or already non-unique
+  }
+  await CrewTicketModel.syncIndexes();
 }
 
 export async function createCrewTicket(data: Omit<CrewTicket, "id">): Promise<CrewTicket> {

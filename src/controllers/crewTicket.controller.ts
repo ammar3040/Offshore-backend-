@@ -6,6 +6,7 @@ import {
   createCrewTicket,
   deleteCrewTicket,
   findAdminById,
+  findCrewTicketBookConflict,
   findCrewTicketByProjectAndCrew,
   findCrewTicketById,
   findAllCrewTickets,
@@ -249,6 +250,35 @@ function cabinToClass(cabin: string): CabinClass {
   return CabinClass.Economy;
 }
 
+/** Outbound start and final arrival from search/book flight legs (same travel period = duplicate). */
+function parseTravelBoundsFromBookFlight(legs: unknown): { travelStart: Date; travelEnd: Date } | null {
+  if (!Array.isArray(legs) || legs.length === 0) return null;
+  const first = legs[0] as {
+    departureTime?: string;
+    arrivalTime?: string;
+    itinerary?: Array<{ departureTime?: string; arrivalTime?: string }>;
+  };
+  const last = legs[legs.length - 1] as typeof first;
+  const firstItin = first?.itinerary?.[0];
+  const lastItinArr = last?.itinerary;
+  const lastItin =
+    lastItinArr && lastItinArr.length > 0 ? lastItinArr[lastItinArr.length - 1] : undefined;
+  const depStr =
+    first?.departureTime || firstItin?.departureTime || "";
+  const arrStr = last?.arrivalTime || lastItin?.arrivalTime || "";
+  const travelStart = depStr ? new Date(depStr) : null;
+  const travelEnd = arrStr ? new Date(arrStr) : null;
+  if (
+    !travelStart ||
+    !travelEnd ||
+    Number.isNaN(travelStart.getTime()) ||
+    Number.isNaN(travelEnd.getTime())
+  ) {
+    return null;
+  }
+  return { travelStart, travelEnd };
+}
+
 export async function bookFlight(req: import("express").Request, res: Response) {
   try {
     const body = req.body as {
@@ -295,6 +325,7 @@ export async function bookFlight(req: import("express").Request, res: Response) 
     const cabinClass = cabinToClass(fl.fares?.[0]?.cabin || "");
     const legCount = fl.legs?.length ?? 1;
     const trip = legCount > 1 ? TripType.RoundTrip : TripType.OneWay;
+    const travelBounds = parseTravelBoundsFromBookFlight(fl.legs ?? []);
     const adult = body.adult ?? 1;
     const children = body.children ?? 0;
     const infants = body.infants ?? 0;
@@ -351,11 +382,18 @@ export async function bookFlight(req: import("express").Request, res: Response) 
         continue;
       }
 
-      const existing = await findCrewTicketByProjectAndCrew(body.project_id, crewId);
+      const existing = await findCrewTicketBookConflict(
+        body.project_id,
+        crewId,
+        travelBounds?.travelStart ?? null,
+        travelBounds?.travelEnd ?? null
+      );
       if (existing) {
         errors.push({
           crew_id: crewId,
-          message: "A crew ticket already exists for this project and crew.",
+          message: travelBounds
+            ? "A crew ticket already exists for this crew member for this travel period (same departure and arrival)."
+            : "A crew ticket already exists for this project and crew member.",
         });
         continue;
       }
@@ -376,6 +414,9 @@ export async function bookFlight(req: import("express").Request, res: Response) 
         balance: runningBalance,
         price: priceGBP,
         cashback: cashbackGBP,
+        ...(travelBounds
+          ? { travelStart: travelBounds.travelStart, travelEnd: travelBounds.travelEnd }
+          : {}),
       });
       created.push(ticket);
     }
