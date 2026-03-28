@@ -6,7 +6,6 @@ import {
   createCrewTicket,
   deleteCrewTicket,
   findAdminById,
-  findCrewTicketBookConflict,
   findCrewTicketByProjectAndCrew,
   findCrewTicketById,
   findAllCrewTickets,
@@ -307,6 +306,10 @@ export async function bookFlight(req: import("express").Request, res: Response) 
       return res.status(400).json({ message: "Invalid project_id." });
     }
 
+    if (new Set(body.crew_ids).size !== body.crew_ids.length) {
+      return res.status(400).json({ message: "crew_ids must not contain duplicate values." });
+    }
+
     const project = await findProjectById(body.project_id);
     if (!project) {
       return res.status(404).json({ message: "Project not found." });
@@ -365,39 +368,49 @@ export async function bookFlight(req: import("express").Request, res: Response) 
     const cashbackGBP = Math.round(convert(payloadCashbackRaw, requestCurrency, "GBP", rates) * 100) / 100;
     const priceGBP = Math.round(convert(payloadPriceRaw, requestCurrency, "GBP", rates) * 100) / 100;
 
-    const created: import("../models/crewTicket.model").CrewTicket[] = [];
-    const errors: { crew_id: string; message: string }[] = [];
-
-    let runningBalance = await sumMarkupByProject(body.project_id);
+    const invalidCrewIds: string[] = [];
+    const missingCrewIds: string[] = [];
+    const duplicateCrewIds: string[] = [];
 
     for (const crewId of body.crew_ids) {
       if (!mongoose.Types.ObjectId.isValid(crewId)) {
-        errors.push({ crew_id: crewId, message: "Invalid crew_id." });
+        invalidCrewIds.push(crewId);
         continue;
       }
-
       const crew = await findCrewByCrewId(crewId);
       if (!crew) {
-        errors.push({ crew_id: crewId, message: "Crew not found." });
+        missingCrewIds.push(crewId);
         continue;
       }
-
-      const existing = await findCrewTicketBookConflict(
-        body.project_id,
-        crewId,
-        travelBounds?.travelStart ?? null,
-        travelBounds?.travelEnd ?? null
-      );
-      if (existing) {
-        errors.push({
-          crew_id: crewId,
-          message: travelBounds
-            ? "A crew ticket already exists for this crew member for this travel period (same departure and arrival)."
-            : "A crew ticket already exists for this project and crew member.",
-        });
-        continue;
+      const existingTicket = await findCrewTicketByProjectAndCrew(body.project_id, crewId);
+      if (existingTicket) {
+        duplicateCrewIds.push(crewId);
       }
+    }
 
+    if (invalidCrewIds.length > 0) {
+      return res.status(400).json({
+        message: "Invalid crew_id(s).",
+        crew_ids: invalidCrewIds,
+      });
+    }
+    if (missingCrewIds.length > 0) {
+      return res.status(404).json({
+        message: "Crew not found for one or more crew_id(s).",
+        crew_ids: missingCrewIds,
+      });
+    }
+    if (duplicateCrewIds.length > 0) {
+      return res.status(409).json({
+        message:
+          "Crew ticket already exists for this project"
+      });
+    }
+
+    const created: import("../models/crewTicket.model").CrewTicket[] = [];
+    let runningBalance = await sumMarkupByProject(body.project_id);
+
+    for (const crewId of body.crew_ids) {
       runningBalance += markupGBP;
 
       const ticket = await createCrewTicket({
@@ -430,13 +443,9 @@ export async function bookFlight(req: import("express").Request, res: Response) 
     }
 
     return res.status(201).json({
-      message:
-        created.length > 0
-          ? `Crew ticket(s) created successfully for ${created.length} crew.`
-          : "No crew tickets created.",
+      message: `Crew ticket(s) created successfully for ${created.length} crew.`,
       crewTickets: created,
       flightId,
-      errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {
     console.error("Error booking flight:", error);
