@@ -400,25 +400,34 @@ export async function bookFlight(req: import("express").Request, res: Response) 
 
       runningBalance += markupGBP;
 
-      const ticket = await createCrewTicket({
-        crew_id: new mongoose.Types.ObjectId(crewId),
-        project_id: new mongoose.Types.ObjectId(body.project_id),
-        from,
-        to,
-        class: cabinClass,
-        adult,
-        children,
-        infants,
-        trip,
-        markup: markupGBP,
-        balance: runningBalance,
-        price: priceGBP,
-        cashback: cashbackGBP,
-        ...(travelBounds
-          ? { travelStart: travelBounds.travelStart, travelEnd: travelBounds.travelEnd }
-          : {}),
-      });
-      created.push(ticket);
+      try {
+        const ticket = await createCrewTicket({
+          crew_id: new mongoose.Types.ObjectId(crewId),
+          project_id: new mongoose.Types.ObjectId(body.project_id),
+          from,
+          to,
+          class: cabinClass,
+          adult,
+          children,
+          infants,
+          trip,
+          markup: markupGBP,
+          balance: runningBalance,
+          price: priceGBP,
+          cashback: cashbackGBP,
+          ...(travelBounds
+            ? { travelStart: travelBounds.travelStart, travelEnd: travelBounds.travelEnd }
+            : {}),
+        });
+        created.push(ticket);
+      } catch (createErr) {
+        runningBalance -= markupGBP;
+        console.error("createCrewTicket failed for crew_id", crewId, createErr);
+        errors.push({
+          crew_id: crewId,
+          message: "Could not create the crew ticket. Please try again or contact support if this persists.",
+        });
+      }
     }
 
     // Update admin balance: current_balance + markup in GBP
@@ -429,14 +438,33 @@ export async function bookFlight(req: import("express").Request, res: Response) 
       await updateAdminBalance(adminId, currentBalance + totalMarkupGBP);
     }
 
-    return res.status(201).json({
-      message:
-        created.length > 0
-          ? `Crew ticket(s) created successfully for ${created.length} crew.`
-          : "No crew tickets created.",
+    const payload = {
       crewTickets: created,
       flightId,
-      errors: errors.length > 0 ? errors : undefined,
+      errors,
+    };
+
+    if (created.length === 0) {
+      const summary =
+        errors.length > 0
+          ? "No crew tickets were created. See errors for each crew member."
+          : "No crew tickets were created.";
+      return res.status(422).json({
+        message: summary,
+        ...payload,
+      });
+    }
+
+    if (errors.length > 0) {
+      return res.status(201).json({
+        message: `Created ${created.length} crew ticket(s). ${errors.length} crew member(s) could not be booked — see errors.`,
+        ...payload,
+      });
+    }
+
+    return res.status(201).json({
+      message: `Crew ticket(s) created successfully for ${created.length} crew member(s).`,
+      ...payload,
     });
   } catch (error) {
     console.error("Error booking flight:", error);
