@@ -400,34 +400,25 @@ export async function bookFlight(req: import("express").Request, res: Response) 
 
       runningBalance += markupGBP;
 
-      try {
-        const ticket = await createCrewTicket({
-          crew_id: new mongoose.Types.ObjectId(crewId),
-          project_id: new mongoose.Types.ObjectId(body.project_id),
-          from,
-          to,
-          class: cabinClass,
-          adult,
-          children,
-          infants,
-          trip,
-          markup: markupGBP,
-          balance: runningBalance,
-          price: priceGBP,
-          cashback: cashbackGBP,
-          ...(travelBounds
-            ? { travelStart: travelBounds.travelStart, travelEnd: travelBounds.travelEnd }
-            : {}),
-        });
-        created.push(ticket);
-      } catch (createErr) {
-        runningBalance -= markupGBP;
-        console.error("createCrewTicket failed for crew_id", crewId, createErr);
-        errors.push({
-          crew_id: crewId,
-          message: "Could not create the crew ticket. Please try again or contact support if this persists.",
-        });
-      }
+      const ticket = await createCrewTicket({
+        crew_id: new mongoose.Types.ObjectId(crewId),
+        project_id: new mongoose.Types.ObjectId(body.project_id),
+        from,
+        to,
+        class: cabinClass,
+        adult,
+        children,
+        infants,
+        trip,
+        markup: markupGBP,
+        balance: runningBalance,
+        price: priceGBP,
+        cashback: cashbackGBP,
+        ...(travelBounds
+          ? { travelStart: travelBounds.travelStart, travelEnd: travelBounds.travelEnd }
+          : {}),
+      });
+      created.push(ticket);
     }
 
     // Update admin balance: current_balance + markup in GBP
@@ -438,33 +429,14 @@ export async function bookFlight(req: import("express").Request, res: Response) 
       await updateAdminBalance(adminId, currentBalance + totalMarkupGBP);
     }
 
-    const payload = {
+    return res.status(201).json({
+      message:
+        created.length > 0
+          ? `Crew ticket(s) created successfully for ${created.length} crew.`
+          : "No crew tickets created.",
       crewTickets: created,
       flightId,
-      errors,
-    };
-
-    if (created.length === 0) {
-      const summary =
-        errors.length > 0
-          ? "No crew tickets were created. See errors for each crew member."
-          : "No crew tickets were created.";
-      return res.status(422).json({
-        message: summary,
-        ...payload,
-      });
-    }
-
-    if (errors.length > 0) {
-      return res.status(201).json({
-        message: `Created ${created.length} crew ticket(s). ${errors.length} crew member(s) could not be booked — see errors.`,
-        ...payload,
-      });
-    }
-
-    return res.status(201).json({
-      message: `Crew ticket(s) created successfully for ${created.length} crew member(s).`,
-      ...payload,
+      errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {
     console.error("Error booking flight:", error);
@@ -595,26 +567,6 @@ export async function deleteCrewTicketByCrewHandler(
 }
 
 const RIYA_URL = "https://caching.corp.riya.travel/api/Search_TrvlNxtAPI";
-
-// In-memory cache for Riya flight search results
-const riyaCache = new Map<string, { data: any; expiresAt: number }>();
-const RIYA_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const RIYA_FETCH_TIMEOUT_MS = 30_000; // 30 seconds
-
-function getRiyaCacheKey(payload: any): string {
-  const { travelFrom, travelTo, DepDate, travClass, noOfAdult, noOfChild, noOfInfant, Sector } = payload;
-  return `${travelFrom}|${travelTo}|${DepDate}|${travClass}|${noOfAdult}|${noOfChild}|${noOfInfant}|${Sector}`;
-}
-
-// In-memory job store for background flight search results
-interface SearchJob {
-  status: "pending" | "done" | "error";
-  result?: object;
-  error?: string;
-  expiresAt: number;
-}
-const searchJobStore = new Map<string, SearchJob>();
-const JOB_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 // Mapping for cabin classes (request body uses lowercase keys)
 const CABIN_CLASS_MAP: Record<string, string> = {
@@ -786,13 +738,6 @@ function transformRiyaResponse(data: any, origin: string, destination: string) {
 }
 
 async function fetchRiya(payload: any) {
-  const cacheKey = getRiyaCacheKey(payload);
-  const now = Date.now();
-  const cached = riyaCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
-    return cached.data;
-  }
-
   const response = await fetch(RIYA_URL, {
     method: "POST",
     headers: {
@@ -807,12 +752,9 @@ async function fetchRiya(payload: any) {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1",
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(RIYA_FETCH_TIMEOUT_MS),
   });
   if (!response.ok) return null;
-  const data = await response.json();
-  riyaCache.set(cacheKey, { data, expiresAt: now + RIYA_CACHE_TTL_MS });
-  return data;
+  return response.json();
 }
 
 const AIRLINE_LIST_STRING =
@@ -1042,124 +984,215 @@ function buildPayload(
   };
 }
 
-async function executeSearch(body: any): Promise<object> {
-  const {
-    tripType = "one-way",
-    from,
-    to,
-    departureDate,
-    returnDate,
-    adults = 1,
-    children = 0,
-    infants = 0,
-    cabinClass = "economy",
-    currency = "GBP",
-    project_id,
-    crew_ids,
-    page = 1,
-    limit = 20,
-    departureTime: filterDepartureTime,
-    arrivalDate: filterArrivalDate,
-    arrivalTime: filterArrivalTime,
-  } = body;
+export async function searchFlightsController(req: import("express").Request, res: Response) {
+  try {
+    const body = req.body;
+    const {
+      tripType = "one-way",
+      from,
+      to,
+      departureDate,
+      returnDate,
+      adults = 1,
+      children = 0,
+      infants = 0,
+      cabinClass = "economy",
+      currency = "GBP",
+      project_id,
+      crew_ids,
+      page = 1,
+      limit = 20,
+      departureTime: filterDepartureTime,
+      arrivalDate: filterArrivalDate,
+      arrivalTime: filterArrivalTime,
+    } = body;
 
-  const crewIdsArray = Array.isArray(crew_ids) ? crew_ids : [];
+    const crewIdsArray = Array.isArray(crew_ids) ? crew_ids : [];
 
-  const [adminSettings, superAdmin] = await Promise.all([
-    getAdminSettings(),
-    findFirstSuperAdmin(),
-  ]);
+    const [adminSettings, superAdmin] = await Promise.all([
+      getAdminSettings(),
+      findFirstSuperAdmin(),
+    ]);
 
-  const superAdminCashback = superAdmin?.cashback ?? null;
-  const rates = await fetchRates();
+    const superAdminCashback = superAdmin?.cashback ?? null;
 
-  const applyAdminLogic = (flights: any[]) => {
-    const baseCurrency = adminSettings.baseCurrency || "GBP";
-    const requestedCurrency = currency as CurrencyCode;
-    const superAdminMarkupRaw = superAdmin?.markup ?? adminSettings.pricing.flatMarkup ?? 0;
-    const localSuperAdminMarkup = convert(
-      superAdminMarkupRaw,
-      baseCurrency as CurrencyCode,
-      requestedCurrency,
-      rates
-    );
-    const localFlatCashback = superAdminCashback != null
-      ? convert(superAdminCashback, baseCurrency as CurrencyCode, requestedCurrency, rates)
-      : convert(adminSettings.incentives.flatCashback || 0, baseCurrency as CurrencyCode, requestedCurrency, rates);
+    let rates: ExchangeRates;
+    try {
+      rates = await fetchRates();
+    } catch (error: unknown) {
+      console.error("Currency Fetch Error:", error);
+      return res.status(500).json({
+        error: `Currency Error: ${error instanceof Error ? error.message : "Could not fetch live rates"}`,
+      });
+    }
 
-    const airlineIncentivesMap = new Map<string, number>();
-    (adminSettings.incentives.airlineSpecific || []).forEach((a) => {
-      const airlines = a.airlines ?? (a.airline ? [a.airline] : []);
-      if (airlines.length > 0 && a.incentive) {
-        const localIncentive = convert(
-          a.incentive,
-          baseCurrency as CurrencyCode,
-          requestedCurrency,
-          rates
-        );
-        airlines.forEach((code: string) => airlineIncentivesMap.set(code.toUpperCase(), localIncentive));
-      }
-    });
+    const applyAdminLogic = (flights: any[]) => {
+      const baseCurrency = adminSettings.baseCurrency || "GBP";
+      const requestedCurrency = currency as CurrencyCode;
+      const superAdminMarkupRaw = superAdmin?.markup ?? adminSettings.pricing.flatMarkup ?? 0;
+      const localSuperAdminMarkup = convert(
+        superAdminMarkupRaw,
+        baseCurrency as CurrencyCode,
+        requestedCurrency,
+        rates
+      );
+      const localFlatCashback = superAdminCashback != null
+        ? convert(superAdminCashback, baseCurrency as CurrencyCode, requestedCurrency, rates)
+        : convert(adminSettings.incentives.flatCashback || 0, baseCurrency as CurrencyCode, requestedCurrency, rates);
 
-    return flights.map((flight) => {
-      const originalCurrency = (flight.originalCurrency || "INR") as CurrencyCode;
-      const airlineCode = (flight.airlineCode || "").toUpperCase();
-      const airlineIncentive = airlineIncentivesMap.get(airlineCode) ?? 0;
-
-      const updatedFares = flight.fares.map((fare: any) => {
-        const riyaPriceConverted = convert(fare.totalFare, originalCurrency, requestedCurrency, rates);
-        const price = Math.round(Math.max(0, riyaPriceConverted + localSuperAdminMarkup));
-        const markup = Math.round(localSuperAdminMarkup);
-        return { ...fare, price, markup, totalFare: price };
+      const airlineIncentivesMap = new Map<string, number>();
+      (adminSettings.incentives.airlineSpecific || []).forEach((a) => {
+        const airlines = a.airlines ?? (a.airline ? [a.airline] : []);
+        if (airlines.length > 0 && a.incentive) {
+          const localIncentive = convert(
+            a.incentive,
+            baseCurrency as CurrencyCode,
+            requestedCurrency,
+            rates
+          );
+          airlines.forEach((code: string) => airlineIncentivesMap.set(code.toUpperCase(), localIncentive));
+        }
       });
 
-      const cashback = airlineIncentive > 0 ? airlineIncentive : localFlatCashback;
-      const { fareBreakdown, ...flightWithoutFareBreakdown } = flight;
+      return flights.map((flight) => {
+        const originalCurrency = (flight.originalCurrency || "INR") as CurrencyCode;
+        const airlineCode = (flight.airlineCode || "").toUpperCase();
+        const airlineIncentive = airlineIncentivesMap.get(airlineCode) ?? 0;
 
-      return {
-        ...flightWithoutFareBreakdown,
-        fares: updatedFares,
-        cashback: cashback > 0 ? cashback : null,
-        appliedIncentive: null,
-      };
-    });
-  };
+        const updatedFares = flight.fares.map((fare: any) => {
+          const riyaPriceConverted = convert(fare.totalFare, originalCurrency, requestedCurrency, rates);
+          const price = Math.round(Math.max(0, riyaPriceConverted + localSuperAdminMarkup));
+          const markup = Math.round(localSuperAdminMarkup);
+          return { ...fare, price, markup, totalFare: price };
+        });
 
-  const fromData = parseAirport(from);
-  const toData = parseAirport(to);
-  const sector = from?.COUNTRY === to?.COUNTRY ? "D" : "I";
+        const cashback = airlineIncentive > 0 ? airlineIncentive : localFlatCashback;
+        const { fareBreakdown, ...flightWithoutFareBreakdown } = flight;
 
-  const formattedDepDate = departureDate ? `${departureDate}T00:00:00` : "0001-01-01T00:00:00";
-  const formattedReturnDate =
-    tripType === "round-trip" && returnDate ? `${returnDate}T00:00:00` : "0001-01-01T00:00:00";
+        return {
+          ...flightWithoutFareBreakdown,
+          fares: updatedFares,
+          cashback: cashback > 0 ? cashback : null,
+          appliedIncentive: null,
+        };
+      });
+    };
 
-  const hasTimeFilters = filterDepartureTime || filterArrivalDate || filterArrivalTime;
+    const fromData = parseAirport(from);
+    const toData = parseAirport(to);
+    const sector = from?.COUNTRY === to?.COUNTRY ? "D" : "I";
 
-  const parseDateTime = (isoStr: string) => {
-    const match = String(isoStr || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/);
-    return match ? { date: match[1], time: `${match[2]}:${match[3]}` } : null;
-  };
+    const formattedDepDate = departureDate ? `${departureDate}T00:00:00` : "0001-01-01T00:00:00";
+    const formattedReturnDate =
+      tripType === "round-trip" && returnDate ? `${returnDate}T00:00:00` : "0001-01-01T00:00:00";
 
-  const matchesTimeFilters = (flight: any) => {
-    if (!hasTimeFilters) return true;
-    const firstLeg = flight?.legs?.[0];
-    if (!firstLeg) return true;
+    const hasTimeFilters = filterDepartureTime || filterArrivalDate || filterArrivalTime;
 
-    const dep = parseDateTime(firstLeg.departureTime);
-    const arr = parseDateTime(firstLeg.arrivalTime);
-    if (!dep || !arr) return true;
+    const parseDateTime = (isoStr: string) => {
+      const match = String(isoStr || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/);
+      return match ? { date: match[1], time: `${match[2]}:${match[3]}` } : null;
+    };
 
-    if (filterDepartureTime && dep.time < filterDepartureTime) return false;
-    if (filterArrivalDate && arr.date !== filterArrivalDate) return false;
-    if (filterArrivalTime && arr.time > filterArrivalTime) return false;
-    return true;
-  };
+    const matchesTimeFilters = (flight: any) => {
+      if (!hasTimeFilters) return true;
+      const firstLeg = flight?.legs?.[0];
+      if (!firstLeg) return true;
 
-  const opts = { adults, children, infants, cabinClass, currency, sector };
+      const dep = parseDateTime(firstLeg.departureTime);
+      const arr = parseDateTime(firstLeg.arrivalTime);
+      if (!dep || !arr) return true;
 
-  if (tripType === "round-trip") {
-    const [outboundData, inboundData] = await Promise.all([
-      fetchRiya(
+      if (filterDepartureTime && dep.time < filterDepartureTime) return false;
+      if (filterArrivalDate && arr.date !== filterArrivalDate) return false;
+      if (filterArrivalTime && arr.time > filterArrivalTime) return false;
+      return true;
+    };
+
+    const opts = { adults, children, infants, cabinClass, currency, sector };
+
+    if (tripType === "round-trip") {
+      const [outboundData, inboundData] = await Promise.all([
+        fetchRiya(
+          buildPayload(
+            fromData.code,
+            toData.code,
+            fromData.cityWithCode,
+            toData.cityWithCode,
+            formattedDepDate,
+            from?.COUNTRY || "IN",
+            to?.COUNTRY || "IN",
+            opts
+          )
+        ),
+        fetchRiya(
+          buildPayload(
+            toData.code,
+            fromData.code,
+            toData.cityWithCode,
+            fromData.cityWithCode,
+            formattedReturnDate,
+            to?.COUNTRY || "IN",
+            from?.COUNTRY || "IN",
+            opts
+          )
+        ),
+      ]);
+
+      const outResults = transformRiyaResponse(outboundData || {}, fromData.code, toData.code);
+      const inResults = transformRiyaResponse(inboundData || {}, toData.code, fromData.code);
+
+      // Apply admin logic to each leg separately, then combine (flat markup per direction)
+      const outWithAdmin = applyAdminLogic(outResults);
+      const inWithAdmin = applyAdminLogic(inResults);
+
+      const results: any[] = [];
+      const minLen = Math.min(outWithAdmin.length, inWithAdmin.length);
+      for (let i = 0; i < minLen; i++) {
+        const o = outWithAdmin[i];
+        const r = inWithAdmin[i];
+        const oRaw = outResults[i];
+        const rRaw = inResults[i];
+        if (!o || !r || !oRaw || !rRaw) continue;
+
+        results.push({
+          ...o,
+          id: `rt-${o.id}-${r.id}`,
+          legs: [...o.legs, ...r.legs],
+          fares: o.fares.map((f: any, fIdx: number) => {
+            const rFare = r.fares[fIdx] ?? r.fares[0];
+            return {
+              ...f,
+              price: (f.price ?? 0) + (rFare.price ?? 0),
+              markup: (f.markup ?? 0) + (rFare.markup ?? 0),
+              totalFare: f.totalFare + rFare.totalFare,
+              basicFare: f.basicFare + rFare.basicFare,
+            };
+          }),
+          fareBreakdown: {
+            total: oRaw.fareBreakdown.total + rRaw.fareBreakdown.total,
+            base: oRaw.fareBreakdown.base + rRaw.fareBreakdown.base,
+            tax: oRaw.fareBreakdown.tax + rRaw.fareBreakdown.tax,
+            serviceFee: oRaw.fareBreakdown.serviceFee + rRaw.fareBreakdown.serviceFee,
+            gst: oRaw.fareBreakdown.gst + rRaw.fareBreakdown.gst,
+          },
+          airlineName: o.legs[0]?.airlineName,
+          airlineCode: o.legs[0]?.airlineCode,
+          stops: o.stops + r.stops,
+        });
+      }
+      const flights = results.filter(matchesTimeFilters);
+      const total = flights.length;
+      const totalPages = Math.ceil(total / limit);
+      const startIndex = (page - 1) * limit;
+      const paginatedFlights = flights.slice(startIndex, startIndex + limit);
+      return res.json({
+        project_id,
+        crew_ids: crewIdsArray,
+        flights: paginatedFlights,
+        pagination: { page, limit, total, totalPages },
+      });
+    } else {
+      const data = await fetchRiya(
         buildPayload(
           fromData.code,
           toData.code,
@@ -1170,196 +1203,24 @@ async function executeSearch(body: any): Promise<object> {
           to?.COUNTRY || "IN",
           opts
         )
-      ),
-      fetchRiya(
-        buildPayload(
-          toData.code,
-          fromData.code,
-          toData.cityWithCode,
-          fromData.cityWithCode,
-          formattedReturnDate,
-          to?.COUNTRY || "IN",
-          from?.COUNTRY || "IN",
-          opts
-        )
-      ),
-    ]);
-
-    const outResults = transformRiyaResponse(outboundData || {}, fromData.code, toData.code);
-    const inResults = transformRiyaResponse(inboundData || {}, toData.code, fromData.code);
-
-    // Apply admin logic to each leg separately, then combine (flat markup per direction)
-    const outWithAdmin = applyAdminLogic(outResults);
-    const inWithAdmin = applyAdminLogic(inResults);
-
-    const results: any[] = [];
-    const minLen = Math.min(outWithAdmin.length, inWithAdmin.length);
-    for (let i = 0; i < minLen; i++) {
-      const o = outWithAdmin[i];
-      const r = inWithAdmin[i];
-      const oRaw = outResults[i];
-      const rRaw = inResults[i];
-      if (!o || !r || !oRaw || !rRaw) continue;
-
-      results.push({
-        ...o,
-        id: `rt-${o.id}-${r.id}`,
-        legs: [...o.legs, ...r.legs],
-        fares: o.fares.map((f: any, fIdx: number) => {
-          const rFare = r.fares[fIdx] ?? r.fares[0];
-          return {
-            ...f,
-            price: (f.price ?? 0) + (rFare.price ?? 0),
-            markup: (f.markup ?? 0) + (rFare.markup ?? 0),
-            totalFare: f.totalFare + rFare.totalFare,
-            basicFare: f.basicFare + rFare.basicFare,
-          };
-        }),
-        fareBreakdown: {
-          total: oRaw.fareBreakdown.total + rRaw.fareBreakdown.total,
-          base: oRaw.fareBreakdown.base + rRaw.fareBreakdown.base,
-          tax: oRaw.fareBreakdown.tax + rRaw.fareBreakdown.tax,
-          serviceFee: oRaw.fareBreakdown.serviceFee + rRaw.fareBreakdown.serviceFee,
-          gst: oRaw.fareBreakdown.gst + rRaw.fareBreakdown.gst,
-        },
-        airlineName: o.legs[0]?.airlineName,
-        airlineCode: o.legs[0]?.airlineCode,
-        stops: o.stops + r.stops,
+      );
+      const transformedData = transformRiyaResponse(data || {}, fromData.code, toData.code);
+      const flights = applyAdminLogic(transformedData).filter(matchesTimeFilters);
+      const total = flights.length;
+      const totalPages = Math.ceil(total / limit);
+      const startIndex = (page - 1) * limit;
+      const paginatedFlights = flights.slice(startIndex, startIndex + limit);
+      return res.json({
+        project_id,
+        crew_ids: crewIdsArray,
+        flights: paginatedFlights,
+        pagination: { page, limit, total, totalPages },
       });
     }
-    const flights = results.filter(matchesTimeFilters);
-    const total = flights.length;
-    const totalPages = Math.ceil(total / limit);
-    const startIndex = (page - 1) * limit;
-    const paginatedFlights = flights.slice(startIndex, startIndex + limit);
-    return { project_id, crew_ids: crewIdsArray, flights: paginatedFlights, pagination: { page, limit, total, totalPages } };
-  } else {
-    const data = await fetchRiya(
-      buildPayload(
-        fromData.code,
-        toData.code,
-        fromData.cityWithCode,
-        toData.cityWithCode,
-        formattedDepDate,
-        from?.COUNTRY || "IN",
-        to?.COUNTRY || "IN",
-        opts
-      )
-    );
-    const transformedData = transformRiyaResponse(data || {}, fromData.code, toData.code);
-    const flights = applyAdminLogic(transformedData).filter(matchesTimeFilters);
-    const total = flights.length;
-    const totalPages = Math.ceil(total / limit);
-    const startIndex = (page - 1) * limit;
-    const paginatedFlights = flights.slice(startIndex, startIndex + limit);
-    return { project_id, crew_ids: crewIdsArray, flights: paginatedFlights, pagination: { page, limit, total, totalPages } };
-  }
-}
-
-function isRiyaCacheWarm(body: any): boolean {
-  const {
-    tripType = "one-way",
-    from,
-    to,
-    departureDate,
-    returnDate,
-    adults = 1,
-    children = 0,
-    infants = 0,
-    cabinClass = "economy",
-    currency = "GBP",
-  } = body;
-
-  const fromData = parseAirport(from);
-  const toData = parseAirport(to);
-  const sector = from?.COUNTRY === to?.COUNTRY ? "D" : "I";
-  const opts = { adults, children, infants, cabinClass, currency, sector };
-  const formattedDepDate = departureDate ? `${departureDate}T00:00:00` : "0001-01-01T00:00:00";
-
-  const outPayload = buildPayload(
-    fromData.code, toData.code, fromData.cityWithCode, toData.cityWithCode,
-    formattedDepDate, from?.COUNTRY || "IN", to?.COUNTRY || "IN", opts
-  );
-  const now = Date.now();
-  const outCached = riyaCache.get(getRiyaCacheKey(outPayload));
-  if (!outCached || outCached.expiresAt <= now) return false;
-
-  if (tripType === "round-trip") {
-    const formattedReturnDate = returnDate ? `${returnDate}T00:00:00` : "0001-01-01T00:00:00";
-    const inPayload = buildPayload(
-      toData.code, fromData.code, toData.cityWithCode, fromData.cityWithCode,
-      formattedReturnDate, to?.COUNTRY || "IN", from?.COUNTRY || "IN", opts
-    );
-    const inCached = riyaCache.get(getRiyaCacheKey(inPayload));
-    if (!inCached || inCached.expiresAt <= now) return false;
-  }
-
-  return true;
-}
-
-export async function searchFlightsController(req: import("express").Request, res: Response) {
-  try {
-    const body = req.body;
-
-    // If results are already cached, serve synchronously with no delay
-    if (isRiyaCacheWarm(body)) {
-      const result = await executeSearch(body);
-      return res.json(result);
-    }
-
-    // Cache miss — start background job and return 202 immediately
-    const jobId = crypto.randomUUID();
-    searchJobStore.set(jobId, { status: "pending", expiresAt: Date.now() + JOB_TTL_MS });
-
-    executeSearch(body)
-      .then((result) => {
-        const job = searchJobStore.get(jobId);
-        if (job) searchJobStore.set(jobId, { ...job, status: "done", result });
-      })
-      .catch((err: unknown) => {
-        const job = searchJobStore.get(jobId);
-        if (job) {
-          searchJobStore.set(jobId, {
-            ...job,
-            status: "error",
-            error: err instanceof Error ? err.message : "Search failed",
-          });
-        }
-      });
-
-    return res.status(202).json({ jobId, status: "pending" });
   } catch (error) {
     console.error("Error processing search request:", error);
     return res.status(500).json({ error: "Internal Server Error" });
   }
-}
-
-export function getSearchResultController(req: import("express").Request, res: Response) {
-  const jobId = req.params.jobId as string;
-  const job = searchJobStore.get(jobId);
-
-  if (!job) {
-    return res.status(404).json({ error: "Job not found or expired" });
-  }
-
-  if (Date.now() > job.expiresAt) {
-    searchJobStore.delete(jobId);
-    return res.status(404).json({ error: "Job expired" });
-  }
-
-  if (job.status === "pending") {
-    return res.status(202).json({ jobId, status: "pending" });
-  }
-
-  if (job.status === "error") {
-    searchJobStore.delete(jobId);
-    return res.status(500).json({ error: job.error || "Search failed" });
-  }
-
-  // Done — return result and clean up
-  const result = job.result;
-  searchJobStore.delete(jobId);
-  return res.json(result);
 }
 
 export interface AirportSearchResult {
