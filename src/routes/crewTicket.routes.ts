@@ -10,6 +10,7 @@ import {
   searchAirports,
   searchFlights,
   searchFlightsController,
+  getSearchResultController,
   sendTicketToCrewEmail,
   uploadTicketPdf,
 } from "../controllers";
@@ -34,6 +35,7 @@ router.get("/crew/:id", authenticateAdminOrCrew, validate(crewIdParamSchema, "pa
 router.get("/:id", authenticateAdminOrCrew, validate(crewTicketIdParamSchema, "params"), getCrewTicketById);
 router.post("/", authenticateAdmin, validate(createCrewTicketSchema), postCrewTicket);
 router.post("/search-flights", authenticateAdmin, validate(searchFlightsSchema), searchFlightsController);
+router.get("/search-flights/result/:jobId", authenticateAdmin, getSearchResultController);
 router.post("/book", authenticateAdmin, validate(bookFlightSchema), bookFlight);
 router.post(
   "/:id/send-ticket-email",
