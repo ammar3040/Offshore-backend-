@@ -1,44 +1,9 @@
 import "dotenv/config";
-import cors from "cors";
-import express, { Request, Response } from "express";
-import routes from "./routes";
+import app from "./app";
 import { connectDB } from "./dbconnection";
 import { startTimesheetWorker } from "./jobs/timesheetWorker";
 
-const app = express();
 const PORT = process.env.PORT || 3000;
-
-const allowedOrigins = [
-  "https://off-shore-frontend.vercel.app",
-  "http://localhost:5173",
-  ...(process.env.CORS_ORIGINS ?? "")
-    .split(",")
-    .map((o) => o.trim())
-    .filter(Boolean),
-];
-
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(null, false);
-      }
-    },
-    credentials: true,
-    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-
-app.use(express.json());
-
-app.get("/", (req: Request, res: Response) => {
-  res.json({ message: "Hello from Express + TypeScript!" });
-});
-
-app.use("/api", routes);
 
 async function startServer() {
   await connectDB();
@@ -49,6 +14,11 @@ async function startServer() {
   });
 }
 
-startServer().catch((err) => {
-  console.error("Failed to start server:", err);
-});
+if (!process.env.VERCEL) {
+  startServer().catch((err) => {
+    console.error("Failed to start server:", err);
+    process.exit(1);
+  });
+}
+
+export default app;

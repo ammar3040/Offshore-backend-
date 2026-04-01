@@ -9,15 +9,19 @@ export async function connectDB(): Promise<void> {
     throw new Error("MONGO_URI environment variable is not set.");
   }
 
+  if (mongoose.connection.readyState === 1) {
+    return;
+  }
+
   try {
     await mongoose.connect(uri);
     // eslint-disable-next-line no-console
-    console.log("Connected to MongoDB:", uri);
+    console.log("Connected to MongoDB");
     await ensureCrewTicketIndexes();
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Failed to connect to MongoDB:", error);
-    process.exit(1);
+    throw error;
   }
 }
 
