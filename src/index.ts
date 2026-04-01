@@ -1,5 +1,4 @@
 import "dotenv/config";
-import cors from "cors";
 import express, { Request, Response } from "express";
 import routes from "./routes";
 import { connectDB } from "./dbconnection";
@@ -8,13 +7,37 @@ import { startTimesheetWorker } from "./jobs/timesheetWorker";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const allowedOrigins = ["https://off-shore-frontend.vercel.app","http://localhost:5173"];
+const allowedOrigins = [
+  "https://off-shore-frontend.vercel.app",
+  "http://localhost:5173",
+];
 
-app.use(
-  cors({
-    origin: allowedOrigins,
-  })
-);
+// ✅ Robust CORS middleware (handles preflight + headers)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  if (!origin || allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  }
+
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,DELETE,OPTIONS"
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization"
+  );
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+
+  // ✅ Handle preflight request
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+
+  next();
+});
+
 app.use(express.json());
 
 app.get("/", (req: Request, res: Response) => {
@@ -28,13 +51,10 @@ async function startServer() {
   startTimesheetWorker();
 
   app.listen(PORT, () => {
-    // eslint-disable-next-line no-console
     console.log(`Server is running at http://localhost:${PORT}`);
   });
 }
 
 startServer().catch((err) => {
-  // eslint-disable-next-line no-console
   console.error("Failed to start server:", err);
 });
-
