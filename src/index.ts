@@ -1,4 +1,5 @@
 import "dotenv/config";
+import cors from "cors";
 import express, { Request, Response } from "express";
 import routes from "./routes";
 import { connectDB } from "./dbconnection";
@@ -10,33 +11,26 @@ const PORT = process.env.PORT || 3000;
 const allowedOrigins = [
   "https://off-shore-frontend.vercel.app",
   "http://localhost:5173",
+  ...(process.env.CORS_ORIGINS ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean),
 ];
 
-// ✅ Robust CORS middleware (handles preflight + headers)
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-
-  if (!origin || allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin || "*");
-  }
-
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET,POST,PUT,DELETE,OPTIONS"
-  );
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization"
-  );
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-
-  // ✅ Handle preflight request
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
-
-  next();
-});
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, false);
+      }
+    },
+    credentials: true,
+    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
 app.use(express.json());
 
