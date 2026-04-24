@@ -164,3 +164,30 @@ export async function findProjectsByParticipantCrewId(crewId: string): Promise<P
     .populate("createdBy");
   return docs.map((doc) => toProject(doc));
 }
+
+/**
+ * Projects that are in progress by calendar (start < now < end), grouped by participant crew id.
+ * Used for list views that need each crew's current assignments without N+1 queries.
+ */
+export async function findActiveProjectsGroupedByCrewId(): Promise<Map<string, Project[]>> {
+  const now = new Date();
+  const docs = await ProjectModel.find({
+    "duration.startDate": { $lt: now },
+    "duration.endDate": { $gt: now },
+  })
+    .sort({ createdAt: -1 })
+    .populate("createdBy");
+
+  const map = new Map<string, Project[]>();
+  for (const doc of docs) {
+    const project = toProject(doc);
+    const partIds = doc.participants as mongoose.Types.ObjectId[];
+    for (const oid of partIds) {
+      const id = oid.toString();
+      const list = map.get(id) ?? [];
+      list.push(project);
+      map.set(id, list);
+    }
+  }
+  return map;
+}

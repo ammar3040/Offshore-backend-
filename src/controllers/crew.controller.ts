@@ -23,8 +23,10 @@ import {
   rejectCrewInvite,
 } from "../models/crewInvite.model";
 import {
+  findActiveProjectsGroupedByCrewId,
   findProjectById,
   findProjectsByParticipantCrewId,
+  type Project,
   updateProject,
 } from "../models/project.model";
 import { deleteTimesheetByCrewAndProject } from "../models/timesheet.model";
@@ -209,10 +211,37 @@ function generateAlphanumericPassword(length = 12): string {
   return Array.from(bytes, (b) => chars[b % chars.length]).join("");
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** GREEN: no in-window project; ORANGE: nearest end within 7 days; RED: in-window with more than 7 days until end. */
+function crewAvailabilitySignal(activeProjects: Project[]): "GREEN" | "ORANGE" | "RED" {
+  if (activeProjects.length === 0) return "GREEN";
+  const now = Date.now();
+  let minEndMs = Infinity;
+  for (const p of activeProjects) {
+    const end = new Date(p.duration.endDate).getTime();
+    if (end < minEndMs) minEndMs = end;
+  }
+  const daysLeft = (minEndMs - now) / MS_PER_DAY;
+  if (daysLeft <= 7) return "ORANGE";
+  return "RED";
+}
+
 export async function getCrew(_req: import("express").Request, res: Response) {
   try {
-    const crew = await findAllCrew();
-    return res.json({ crew });
+    const [crew, activeByCrewId] = await Promise.all([
+      findAllCrew(),
+      findActiveProjectsGroupedByCrewId(),
+    ]);
+    const crewWithSignal = crew.map((c) => {
+      const activeProjects = activeByCrewId.get(c.id) ?? [];
+      return {
+        ...c,
+        activeProjects,
+        signal: crewAvailabilitySignal(activeProjects),
+      };
+    });
+    return res.json({ crew: crewWithSignal });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching crew:", error);
