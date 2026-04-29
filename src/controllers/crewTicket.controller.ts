@@ -1252,6 +1252,111 @@ const COUNTRY_NAMES: Record<string, string> = {
   ID: "Indonesia", NO: "Norway", ES: "Spain", IT: "Italy", SA: "Saudi Arabia",
 };
 
+/** Country name (lowercase) → ISO3166 alpha-2, built lazily */
+let countryNameToIsoLookup: Map<string, string> | null = null;
+
+function resolveCountryIsoFromSearchQuery(searchText: string): string | null {
+  const trimmed = searchText.trim();
+  if (trimmed.length < 2) return null;
+  // Two-letter country code typed directly (must be in our supported list)
+  if (trimmed.length === 2 && /^[a-z]{2}$/i.test(trimmed)) {
+    const code = trimmed.toUpperCase();
+    return COUNTRY_NAMES[code] ? code : null;
+  }
+  if (!countryNameToIsoLookup) {
+    const m = new Map<string, string>();
+    for (const [iso, name] of Object.entries(COUNTRY_NAMES)) {
+      m.set(name.toLowerCase(), iso);
+    }
+    for (const [name, iso] of Object.entries(COUNTRY_CODE_MAP)) {
+      m.set(name.toLowerCase(), iso);
+    }
+    countryNameToIsoLookup = m;
+  }
+  return countryNameToIsoLookup.get(trimmed.toLowerCase()) ?? null;
+}
+
+const AIRPORTS_BY_COUNTRY_MAX = 600;
+const AIRPORTS_BY_COUNTRY_PAGE = 100;
+const AIRPORTS_BY_COUNTRY_MAX_PAGES = Math.ceil(AIRPORTS_BY_COUNTRY_MAX / AIRPORTS_BY_COUNTRY_PAGE);
+
+type AirportroutesCountryHit = {
+  icao?: string;
+  iata?: string;
+  name?: string;
+  city?: string;
+  scheduled_service?: boolean;
+  type?: string;
+};
+
+/** Prefer commercial-ish rows; still include ICAO-only if scheduled at a paved field */
+function airportroutesCountryRowSelectable(hit: AirportroutesCountryHit): boolean {
+  const iata = (hit.iata ?? "").trim().toUpperCase();
+  if (/^[A-Z]{3}$/.test(iata)) return true;
+  const type = String(hit.type ?? "").toLowerCase();
+  if (type === "heliport" || type === "closed" || type === "balloonport" || type === "seaplane_base") return false;
+  return hit.scheduled_service === true;
+}
+
+function airportroutesCountryRowToSearchResult(hit: AirportroutesCountryHit, countryIso2: string, countryDisplayName: string): AirportSearchResult | null {
+  const iata = (hit.iata ?? "").trim().toUpperCase();
+  const rawCode =
+    /^[A-Z]{3}$/.test(iata) ? iata : (hit.icao ?? "").trim().toUpperCase() || "";
+  if (!rawCode) return null;
+  const city = ((hit.city ?? "").trim() || "Unknown").replace(/\s+/g, " ").trim();
+  const placeName = (hit.name ?? "").trim().replace(/\s+/g, " ").trim() || "(no name)";
+  const name = `${city} [${rawCode}] - ${placeName}, ${countryDisplayName}`;
+  const code =
+    /^[A-Z]{3}$/.test(iata) ? iata : rawCode.slice(0, 4).toUpperCase();
+
+  return {
+    Name: name,
+    Code: code,
+    CountryCode: countryIso2,
+    CountryName: countryDisplayName,
+    COUNTRY: countryIso2,
+    COUNTRYNAME: countryDisplayName,
+  };
+}
+
+/** Paginate AirportRoutes `/countries/{code}/airports/` so typing a country returns its airports/cities */
+async function fetchAirportsByCountry(countryIso2: string): Promise<AirportSearchResult[]> {
+  const countryDisplayName = COUNTRY_NAMES[countryIso2] ?? countryIso2;
+  const out: AirportSearchResult[] = [];
+  const dedupeKeys = new Set<string>();
+  let page = 1;
+  while (out.length < AIRPORTS_BY_COUNTRY_MAX && page <= AIRPORTS_BY_COUNTRY_MAX_PAGES) {
+    const url =
+      `https://www.airportroutes.com/api/countries/${encodeURIComponent(countryIso2)}/airports/` +
+      `?page=${page}&limit=${AIRPORTS_BY_COUNTRY_PAGE}`;
+    const res = await fetch(url);
+    if (!res.ok) break;
+    const data = (await res.json()) as {
+      airports?: AirportroutesCountryHit[];
+      has_next?: boolean;
+    };
+    const batch = data.airports ?? [];
+    if (batch.length === 0) break;
+
+    for (const hit of batch) {
+      if (!airportroutesCountryRowSelectable(hit)) continue;
+      const mapped = airportroutesCountryRowToSearchResult(hit, countryIso2, countryDisplayName);
+      if (!mapped) continue;
+      const iataLen = /^[A-Za-z]{3}$/.test(mapped.Code) ? mapped.Code : "";
+      const dk = iataLen.length === 3 ? `i:${iataLen}` : `icao:${hit.icao ?? mapped.Code}:${mapped.Name}`;
+      if (dedupeKeys.has(dk)) continue;
+      dedupeKeys.add(dk);
+      out.push(mapped);
+    }
+
+    if (!data.has_next) break;
+    page += 1;
+  }
+
+  out.sort((a, b) => a.Name.localeCompare(b.Name, undefined, { sensitivity: "base" }));
+  return out;
+}
+
 async function fetchAirportsFallback(query: string): Promise<AirportSearchResult[]> {
   const res = await fetch(
     `https://www.airportroutes.com/api/search-airports/?q=${encodeURIComponent(query)}&limit=20`
@@ -1274,6 +1379,19 @@ export async function searchAirports(req: import("express").Request, res: Respon
     if (!query || query.length < 2) {
       return res.status(400).json({ message: "Query must be at least 2 characters." });
     }
+
+    const countryIsoFromQuery = resolveCountryIsoFromSearchQuery(query);
+    if (countryIsoFromQuery) {
+      try {
+        const byCountry = await fetchAirportsByCountry(countryIsoFromQuery);
+        if (byCountry.length > 0) {
+          return res.json(byCountry);
+        }
+      } catch {
+        // Fall through to Riya + search fallback when country listing fails or is unavailable
+      }
+    }
+
     const { statusCode, data } = await fetchRiyaGetcity(query);
 
     if (statusCode && statusCode >= 400) {
