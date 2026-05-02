@@ -78,6 +78,8 @@ const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 export const searchFlightsSchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
+  /** Non-stop only: sets Riya chkNonStop and filters results to aggregated stops === 0. */
+  directOnly: Joi.boolean().optional(),
   departureTime: Joi.string().pattern(timePattern).optional().messages({
     "string.pattern.base": "departureTime must be HH:mm (e.g. 10:30)",
   }),

@@ -322,12 +322,26 @@ export async function bookFlight(req: import("express").Request, res: Response) 
     const fl = body.flight;
     const flightId = fl.id;
     const firstLeg = fl.legs[0];
-    const firstItinerary = firstLeg?.itinerary?.[0];
-    const from = parseAirportFromString(firstItinerary?.fromAirport || "");
-    const to = parseAirportFromString(firstItinerary?.toAirport || "");
+    const firstItin = firstLeg?.itinerary?.[0];
+    const from = parseAirportFromString(firstItin?.fromAirport || "");
+
+    /** Combined outbound+return from search uses id prefix `rt-`; do not infer RT from connection segment count. */
+    const isRoundTripBundle =
+      typeof flightId === "string" && flightId.startsWith("rt-");
+    let toAirportRaw = "";
+    if (isRoundTripBundle && firstLeg?.itinerary?.length) {
+      const outLast = firstLeg.itinerary[firstLeg.itinerary.length - 1];
+      toAirportRaw = outLast?.toAirport ?? "";
+    } else {
+      const lastLeg = fl.legs[fl.legs.length - 1];
+      const lastItins = lastLeg?.itinerary ?? [];
+      const lastItin = lastItins[lastItins.length - 1];
+      toAirportRaw = lastItin?.toAirport ?? firstItin?.toAirport ?? "";
+    }
+    const to = parseAirportFromString(toAirportRaw);
     const cabinClass = cabinToClass(fl.fares?.[0]?.cabin || "");
     const legCount = fl.legs?.length ?? 1;
-    const trip = legCount > 1 ? TripType.RoundTrip : TripType.OneWay;
+    const trip = isRoundTripBundle ? TripType.RoundTrip : TripType.OneWay;
     const travelBounds = parseTravelBoundsFromBookFlight(fl.legs ?? []);
     const adult = body.adult ?? 1;
     const children = body.children ?? 0;
@@ -336,7 +350,7 @@ export async function bookFlight(req: import("express").Request, res: Response) 
     if (!from.Name || !to.Name) {
       return res.status(400).json({
         message:
-          "Could not extract from/to from flight.legs[0].itinerary[0].fromAirport and toAirport.",
+          "Could not extract from/to from flight legs/itinerary (fromAirport, toAirport).",
       });
     }
 
@@ -824,6 +838,8 @@ function buildPayload(
     cabinClass: string;
     currency: string;
     sector: string;
+    /** Prefer non-stop only (Riya chkNonStop). Useful for multi-city per-leg searches. */
+    directOnly?: boolean;
   }
 ) {
   const today = new Date();
@@ -928,7 +944,7 @@ function buildPayload(
     newROE: [{ objnewROE: 0 }],
     pricingcodeList: [{ objpricingcode: "752375," }],
     hdFSFlag: 0,
-    chkNonStop: false,
+    chkNonStop: Boolean(opts.directOnly),
     chk1Stop: false,
     chk2Stop: false,
     IsHost: false,
@@ -1014,6 +1030,8 @@ export async function searchFlightsController(req: import("express").Request, re
       departureTime: filterDepartureTime,
       arrivalDate: filterArrivalDate,
       arrivalTime: filterArrivalTime,
+      /** When true, Riya search requests non-stop flights only for this segment. */
+      directOnly = false,
     } = body;
 
     const crewIdsArray = Array.isArray(crew_ids) ? crew_ids : [];
@@ -1117,7 +1135,21 @@ export async function searchFlightsController(req: import("express").Request, re
       return true;
     };
 
-    const opts = { adults, children, infants, cabinClass, currency, sector };
+    const matchesDirectOnly = (flight: any) => {
+      if (!directOnly) return true;
+      const stops = typeof flight?.stops === "number" ? flight.stops : Number(flight?.stops) || 0;
+      return stops === 0;
+    };
+
+    const opts = {
+      adults,
+      children,
+      infants,
+      cabinClass,
+      currency,
+      sector,
+      directOnly: Boolean(directOnly),
+    };
 
     if (tripType === "round-trip") {
       const [outboundData, inboundData] = await Promise.all([
@@ -1189,7 +1221,7 @@ export async function searchFlightsController(req: import("express").Request, re
           stops: o.stops + r.stops,
         });
       }
-      const flights = results.filter(matchesTimeFilters);
+      const flights = results.filter(matchesTimeFilters).filter(matchesDirectOnly);
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
       const startIndex = (page - 1) * limit;
@@ -1214,7 +1246,9 @@ export async function searchFlightsController(req: import("express").Request, re
         )
       );
       const transformedData = transformRiyaResponse(data || {}, fromData.code, toData.code);
-      const flights = applyAdminLogic(transformedData).filter(matchesTimeFilters);
+      const flights = applyAdminLogic(transformedData)
+        .filter(matchesTimeFilters)
+        .filter(matchesDirectOnly);
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
       const startIndex = (page - 1) * limit;
