@@ -56,6 +56,13 @@ router.patch(
   validate(updateCrewTicketSchema),
   patchCrewTicket
 );
+/** Admin panel: cancel ticket (same behavior as DELETE /:id — accrues cancellation debt, then removes ticket). */
+router.post(
+  "/:id/cancel",
+  authenticateAdmin,
+  validate(crewTicketIdParamSchema, "params"),
+  deleteCrewTicketHandler
+);
 router.delete(
   "/:id",
   authenticateAdmin,

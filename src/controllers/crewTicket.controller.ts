@@ -15,6 +15,7 @@ import {
   updateCrewTicket,
   sumMarkupByProject,
   updateAdminBalance,
+  updateAdminCancellationState,
 } from "../models";
 import { CabinClass, TripType } from "../models/crewTicket.model";
 import { convert, fetchRates, type CurrencyCode, type ExchangeRates } from "../lib/currency";
@@ -23,6 +24,14 @@ import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { sendFlightTicketEmail, type FlightTicketData } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
 import { fetchRiyaGetcity, normalizeRiyaAirports } from "../lib/riya-airports";
+import type { AuthenticatedRequest } from "../middleware/auth";
+import {
+  accrueCancellationDebtForDeletedCrewTicket,
+  applyCancellationPaymentOnBook,
+  cancellationInstallmentGbp,
+  cancellationInstallmentInCurrency,
+  revertCancellationAccrual,
+} from "../services/cancellation-debt";
 
 export async function getCrewTickets(_req: import("express").Request, res: Response) {
   try {
@@ -448,12 +457,18 @@ export async function bookFlight(req: import("express").Request, res: Response) 
       created.push(ticket);
     }
 
-    // Update admin balance: current_balance + markup in GBP
+    // Update admin balance (markup) and reduce cancellation debt (installment matches search surcharge in payload price)
     if (adminId && created.length > 0) {
       const adminDoc = await findAdminById(adminId);
       const currentBalance = adminDoc?.balance ?? 0;
       const totalMarkupGBP = markupGBP * created.length;
       await updateAdminBalance(adminId, currentBalance + totalMarkupGBP);
+
+      const o = adminDoc?.cancellationOutstanding ?? 0;
+      const s = adminDoc?.cancellationSlotsRemaining ?? 0;
+      const billingUnits = created.length * legCount;
+      const { newOutstanding, newSlots } = applyCancellationPaymentOnBook(o, s, billingUnits);
+      await updateAdminCancellationState(adminId, newOutstanding, newSlots);
     }
 
     return res.status(201).json({
@@ -547,8 +562,16 @@ export async function deleteCrewTicketHandler(
 ) {
   try {
     const { id } = req.params;
+    const ticket = await findCrewTicketById(id);
+    if (!ticket) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+    const { feeGbp, adminId } = await accrueCancellationDebtForDeletedCrewTicket(ticket);
     const deleted = await deleteCrewTicket(id);
     if (!deleted) {
+      if (adminId && feeGbp > 0) {
+        await revertCancellationAccrual(adminId, feeGbp);
+      }
       return res.status(404).json({ message: "Crew ticket not found." });
     }
     return res.json({ message: "Crew ticket deleted successfully." });
@@ -577,8 +600,12 @@ export async function deleteCrewTicketByCrewHandler(
     if (ticketCrewId !== crew_id) {
       return res.status(403).json({ message: "Ticket does not belong to this crew member." });
     }
+    const { feeGbp, adminId } = await accrueCancellationDebtForDeletedCrewTicket(ticket);
     const deleted = await deleteCrewTicket(ticket_id);
     if (!deleted) {
+      if (adminId && feeGbp > 0) {
+        await revertCancellationAccrual(adminId, feeGbp);
+      }
       return res.status(404).json({ message: "Crew ticket not found." });
     }
     return res.json({ message: "Crew ticket deleted successfully." });
@@ -1043,6 +1070,13 @@ export async function searchFlightsController(req: import("express").Request, re
 
     const superAdminCashback = superAdmin?.cashback ?? null;
 
+    const adminIdForDebt = (req as AuthenticatedRequest).user?.userId;
+    const adminForDebt = adminIdForDebt ? await findAdminById(adminIdForDebt) : null;
+    const installmentGbpForSearch = cancellationInstallmentGbp(
+      adminForDebt?.cancellationOutstanding ?? 0,
+      adminForDebt?.cancellationSlotsRemaining ?? 0
+    );
+
     let rates: ExchangeRates;
     try {
       rates = await fetchRates();
@@ -1056,6 +1090,11 @@ export async function searchFlightsController(req: import("express").Request, re
     const applyAdminLogic = (flights: any[]) => {
       const baseCurrency = adminSettings.baseCurrency || "GBP";
       const requestedCurrency = currency as CurrencyCode;
+      const localCancellationSurcharge = cancellationInstallmentInCurrency(
+        installmentGbpForSearch,
+        requestedCurrency,
+        rates
+      );
       const superAdminMarkupRaw = superAdmin?.markup ?? adminSettings.pricing.flatMarkup ?? 0;
       const localSuperAdminMarkup = convert(
         superAdminMarkupRaw,
@@ -1088,9 +1127,17 @@ export async function searchFlightsController(req: import("express").Request, re
 
         const updatedFares = flight.fares.map((fare: any) => {
           const riyaPriceConverted = convert(fare.totalFare, originalCurrency, requestedCurrency, rates);
-          const price = Math.round(Math.max(0, riyaPriceConverted + localSuperAdminMarkup));
+          const price = Math.round(
+            Math.max(0, riyaPriceConverted + localSuperAdminMarkup + localCancellationSurcharge)
+          );
           const markup = Math.round(localSuperAdminMarkup);
-          return { ...fare, price, markup, totalFare: price };
+          return {
+            ...fare,
+            price,
+            markup,
+            totalFare: price,
+            cancellationSurcharge: Math.round(localCancellationSurcharge),
+          };
         });
 
         const cashback = airlineIncentive > 0 ? airlineIncentive : localFlatCashback;

@@ -76,6 +76,7 @@ export async function getAnalytics(req: AuthenticatedRequest, res: Response) {
       totalTickets,
       markup: superAdmin?.markup ?? null,
       cashback: superAdmin?.cashback ?? null,
+      cancellationCharges: superAdmin?.cancellationCharges ?? null,
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -96,10 +97,14 @@ export async function getAllAdmins(_req: AuthenticatedRequest, res: Response) {
   }
 }
 
-/** Add/upsert markup and cashback for the authenticated superadmin */
+/** Add/upsert markup, cashback, and cancellation charges for the authenticated superadmin */
 export async function upsertMarkup(req: AuthenticatedRequest, res: Response) {
   try {
-    const update: { markup?: number; cashback?: number | null } = {};
+    const update: {
+      markup?: number;
+      cashback?: number | null;
+      cancellationCharges?: number | null;
+    } = {};
 
     if (req.body.markup !== undefined) {
       const raw = req.body.markup;
@@ -123,8 +128,30 @@ export async function upsertMarkup(req: AuthenticatedRequest, res: Response) {
       }
     }
 
-    if (update.markup === undefined && update.cashback === undefined) {
-      return res.status(400).json({ message: "At least one of markup or cashback is required." });
+    if (req.body.cancellationCharges !== undefined) {
+      if (req.body.cancellationCharges === null) {
+        update.cancellationCharges = null;
+      } else {
+        const raw = req.body.cancellationCharges;
+        const cancellationCharges = typeof raw === "string" ? parseFloat(raw) : Number(raw);
+        if (typeof cancellationCharges !== "number" || isNaN(cancellationCharges)) {
+          return res.status(400).json({ message: "cancellationCharges must be a valid number or null." });
+        }
+        if (cancellationCharges < 0) {
+          return res.status(400).json({ message: "cancellationCharges must be >= 0." });
+        }
+        update.cancellationCharges = cancellationCharges;
+      }
+    }
+
+    if (
+      update.markup === undefined &&
+      update.cashback === undefined &&
+      update.cancellationCharges === undefined
+    ) {
+      return res.status(400).json({
+        message: "At least one of markup, cashback, or cancellationCharges is required.",
+      });
     }
 
     const superAdminId = req.user?.userId;

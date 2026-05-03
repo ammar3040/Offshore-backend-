@@ -11,6 +11,8 @@ export interface SuperAdmin {
   markup?: number;
   /** Optional cashback value */
   cashback?: number | null;
+  /** Per-ticket cancellation fee in admin base currency (env ADMIN_BASE_CURRENCY; same semantic as markup). */
+  cancellationCharges?: number | null;
 }
 
 export interface SuperAdminDocument extends Omit<SuperAdmin, "id">, Document {
@@ -29,6 +31,7 @@ const superAdminSchema = new Schema<SuperAdminDocument>(
     phone: { type: String, required: true },
     markup: { type: Number, required: false },
     cashback: { type: Number, required: false, default: null },
+    cancellationCharges: { type: Number, required: false, default: null },
   },
   { timestamps: true }
 );
@@ -47,6 +50,7 @@ function toSuperAdmin(doc: SuperAdminDocument): SuperAdmin {
     phone: doc.phone,
     markup: doc.markup,
     cashback: doc.cashback ?? null,
+    cancellationCharges: doc.cancellationCharges ?? null,
   };
 }
 
@@ -59,6 +63,7 @@ function toSuperAdminPublic(doc: SuperAdminDocument): SuperAdminPublic {
     phone: doc.phone,
     markup: doc.markup,
     cashback: doc.cashback ?? null,
+    cancellationCharges: doc.cancellationCharges ?? null,
   };
 }
 
@@ -90,12 +95,13 @@ export async function createSuperAdmin(
 
 export async function updateSuperAdminMarkup(
   id: string,
-  data: { markup?: number; cashback?: number | null }
+  data: { markup?: number; cashback?: number | null; cancellationCharges?: number | null }
 ): Promise<SuperAdminPublic | null> {
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
   const update: Record<string, unknown> = {};
   if (data.markup !== undefined) update.markup = data.markup;
   if (data.cashback !== undefined) update.cashback = data.cashback;
+  if (data.cancellationCharges !== undefined) update.cancellationCharges = data.cancellationCharges;
   if (Object.keys(update).length === 0) return findSuperAdminById(id);
   const doc = await SuperAdminModel.findByIdAndUpdate(id, update, { new: true });
   return doc ? toSuperAdminPublic(doc) : null;

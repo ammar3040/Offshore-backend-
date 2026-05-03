@@ -8,6 +8,10 @@ export interface Admin {
   password: string; // hashed password
   phone: string;
   balance?: number;
+  /** Cancellation debt to recover via search/book surcharges (GBP, same unit as booked ticket price). */
+  cancellationOutstanding?: number;
+  /** Divisor for installment = outstanding / slots (incremented per cancelled ticket). */
+  cancellationSlotsRemaining?: number;
 }
 
 export interface AdminDocument extends Omit<Admin, "id">, Document {
@@ -25,6 +29,8 @@ const adminSchema = new Schema<AdminDocument>(
     password: { type: String, required: true, select: false },
     phone: { type: String, required: true },
     balance: { type: Number, required: true, default: 0 },
+    cancellationOutstanding: { type: Number, required: true, default: 0 },
+    cancellationSlotsRemaining: { type: Number, required: true, default: 0 },
   },
   { timestamps: true }
 );
@@ -41,6 +47,8 @@ function toAdmin(doc: AdminDocument): Admin {
     password: doc.password,
     phone: doc.phone,
     balance: doc.balance ?? 0,
+    cancellationOutstanding: doc.cancellationOutstanding ?? 0,
+    cancellationSlotsRemaining: doc.cancellationSlotsRemaining ?? 0,
   };
 }
 
@@ -52,6 +60,8 @@ function toAdminPublic(doc: AdminDocument): AdminPublic {
     email: doc.email,
     phone: doc.phone,
     balance: doc.balance ?? 0,
+    cancellationOutstanding: doc.cancellationOutstanding ?? 0,
+    cancellationSlotsRemaining: doc.cancellationSlotsRemaining ?? 0,
   };
 }
 
@@ -86,6 +96,72 @@ export async function updateAdminBalance(adminId: string, newBalance: number): P
   const doc = await AdminModel.findByIdAndUpdate(
     adminId,
     { balance: newBalance },
+    { new: true }
+  );
+  return doc ? toAdminPublic(doc) : null;
+}
+
+export async function incrementAdminCancellationDebt(
+  adminId: string,
+  feeGbp: number
+): Promise<AdminPublic | null> {
+  if (!mongoose.Types.ObjectId.isValid(adminId)) return null;
+  if (feeGbp <= 0) return findAdminById(adminId);
+  const rounded = Math.round(feeGbp * 100) / 100;
+  const doc = await AdminModel.findByIdAndUpdate(
+    adminId,
+    {
+      $inc: {
+        cancellationOutstanding: rounded,
+        cancellationSlotsRemaining: 1,
+      },
+    },
+    { new: true }
+  );
+  return doc ? toAdminPublic(doc) : null;
+}
+
+/** Undo a single accrual when a follow-up step fails (e.g. delete did not complete). */
+export async function revertAdminCancellationDebt(
+  adminId: string,
+  feeGbp: number
+): Promise<AdminPublic | null> {
+  if (!mongoose.Types.ObjectId.isValid(adminId)) return null;
+  if (feeGbp <= 0) return findAdminById(adminId);
+  const rounded = Math.round(feeGbp * 100) / 100;
+  const doc = await AdminModel.findByIdAndUpdate(
+    adminId,
+    {
+      $inc: {
+        cancellationOutstanding: -rounded,
+        cancellationSlotsRemaining: -1,
+      },
+    },
+    { new: true }
+  );
+  if (!doc) return null;
+  const out = Math.max(0, doc.cancellationOutstanding ?? 0);
+  const slots = Math.max(0, doc.cancellationSlotsRemaining ?? 0);
+  if (out !== doc.cancellationOutstanding || slots !== doc.cancellationSlotsRemaining) {
+    return updateAdminCancellationState(adminId, out, slots);
+  }
+  return toAdminPublic(doc);
+}
+
+export async function updateAdminCancellationState(
+  adminId: string,
+  cancellationOutstanding: number,
+  cancellationSlotsRemaining: number
+): Promise<AdminPublic | null> {
+  if (!mongoose.Types.ObjectId.isValid(adminId)) return null;
+  const out = Math.max(0, Math.round(cancellationOutstanding * 100) / 100);
+  const slots = Math.max(0, Math.floor(cancellationSlotsRemaining));
+  const doc = await AdminModel.findByIdAndUpdate(
+    adminId,
+    {
+      cancellationOutstanding: out,
+      cancellationSlotsRemaining: slots,
+    },
     { new: true }
   );
   return doc ? toAdminPublic(doc) : null;
