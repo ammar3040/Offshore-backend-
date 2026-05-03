@@ -9,6 +9,7 @@ const app = express();
 const allowedOrigins = [
   "https://off-shore-frontend.vercel.app",
   "http://localhost:5173",
+  "https://subseacore.com",
   ...(process.env.CORS_ORIGINS ?? "")
     .split(",")
     .map((o) => o.trim())
