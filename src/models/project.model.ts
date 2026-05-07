@@ -95,7 +95,7 @@ const projectSchema = new Schema<ProjectDocument>(
   { timestamps: true }
 );
 
-const ProjectModel: Model<ProjectDocument> =
+export const ProjectModel: Model<ProjectDocument> =
   mongoose.models.Project ?? mongoose.model<ProjectDocument>("Project", projectSchema);
 
 function toProject(doc: ProjectDocument): Project {
@@ -165,6 +165,34 @@ export async function countProjects(): Promise<number> {
 export async function countActiveAdmins(): Promise<number> {
   const adminIds = await ProjectModel.distinct("createdBy");
   return adminIds.length;
+}
+
+/** Per-admin: projects created, and distinct crew linked via project participants. */
+export async function aggregateAdminProjectAndCrewCounts(): Promise<
+  Map<string, { projectCount: number; crewCount: number }>
+> {
+  const [projectRows, crewRows] = await Promise.all([
+    ProjectModel.aggregate<{ _id: mongoose.Types.ObjectId; c: number }>([
+      { $group: { _id: "$createdBy", c: { $sum: 1 } } },
+    ]),
+    ProjectModel.aggregate<{ _id: mongoose.Types.ObjectId; c: number }>([
+      { $unwind: "$participants" },
+      { $group: { _id: { admin: "$createdBy", crew: "$participants" } } },
+      { $group: { _id: "$_id.admin", c: { $sum: 1 } } },
+    ]),
+  ]);
+
+  const map = new Map<string, { projectCount: number; crewCount: number }>();
+  for (const r of projectRows) {
+    map.set(r._id.toString(), { projectCount: r.c, crewCount: 0 });
+  }
+  for (const r of crewRows) {
+    const id = r._id.toString();
+    const cur = map.get(id) ?? { projectCount: 0, crewCount: 0 };
+    cur.crewCount = r.c;
+    map.set(id, cur);
+  }
+  return map;
 }
 
 /** Find projects where the given crew is a participant. */

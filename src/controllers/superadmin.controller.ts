@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
 import {
+  aggregateAdminProjectAndCrewCounts,
+  aggregateTicketCountsByAdmin,
   countAdmins,
   countActiveAdmins,
   countCrew,
@@ -58,15 +60,64 @@ export async function loginSuperAdmin(req: Request, res: Response) {
 /** Analytics dashboard - superadmin only */
 export async function getAnalytics(req: AuthenticatedRequest, res: Response) {
   try {
-    const [totalAdmins, activeAdmins, totalProjects, totalCrew, totalTickets, superAdmin] =
-      await Promise.all([
-        countAdmins(),
-        countActiveAdmins(),
-        countProjects(),
-        countCrew(),
-        countCrewTickets(),
-        req.user?.userId ? findSuperAdminById(req.user.userId) : null,
-      ]);
+    const [
+      totalAdmins,
+      activeAdmins,
+      totalProjects,
+      totalCrew,
+      totalTickets,
+      superAdmin,
+      admins,
+      projectCrewCounts,
+      ticketCountsByAdmin,
+    ] = await Promise.all([
+      countAdmins(),
+      countActiveAdmins(),
+      countProjects(),
+      countCrew(),
+      countCrewTickets(),
+      req.user?.userId ? findSuperAdminById(req.user.userId) : null,
+      findAllAdmins(),
+      aggregateAdminProjectAndCrewCounts(),
+      aggregateTicketCountsByAdmin(),
+    ]);
+
+    type ActivityRow = {
+      adminId: string;
+      email: string;
+      projectsCount: number;
+      crewCount: number;
+      cancellationOutstanding?: number | null;
+      cancellationSlotsRemaining?: number | null;
+    };
+
+    const adminsByActivity: ActivityRow[] = admins
+      .map((a) => {
+        const pc = projectCrewCounts.get(a.id) ?? { projectCount: 0, crewCount: 0 };
+        const ticketCount = ticketCountsByAdmin.get(a.id) ?? 0;
+        const out = a.cancellationOutstanding;
+        const slots = a.cancellationSlotsRemaining;
+        return {
+          adminId: a.id,
+          email: a.email,
+          projectsCount: pc.projectCount,
+          crewCount: pc.crewCount,
+          cancellationOutstanding:
+            typeof out === "number" && !Number.isNaN(out) ? out : null,
+          cancellationSlotsRemaining:
+            typeof slots === "number" && Number.isFinite(slots) ? Math.trunc(slots) : null,
+          __ticketCount: ticketCount,
+        };
+      })
+      .sort((x, y) => {
+        const tx = x.__ticketCount;
+        const ty = y.__ticketCount;
+        if (ty !== tx) return ty - tx;
+        if (y.projectsCount !== x.projectsCount) return y.projectsCount - x.projectsCount;
+        if (y.crewCount !== x.crewCount) return y.crewCount - x.crewCount;
+        return x.email.localeCompare(y.email);
+      })
+      .map(({ __ticketCount: _t, ...row }) => row);
 
     return res.json({
       totalAdmins,
@@ -77,6 +128,7 @@ export async function getAnalytics(req: AuthenticatedRequest, res: Response) {
       markup: superAdmin?.markup ?? null,
       cashback: superAdmin?.cashback ?? null,
       cancellationCharges: superAdmin?.cancellationCharges ?? null,
+      adminsByActivity,
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -88,8 +140,31 @@ export async function getAnalytics(req: AuthenticatedRequest, res: Response) {
 /** Fetch all admins - superadmin only */
 export async function getAllAdmins(_req: AuthenticatedRequest, res: Response) {
   try {
-    const admins = await findAllAdmins();
-    return res.json({ admins });
+    const [admins, projectCrewCounts] = await Promise.all([
+      findAllAdmins(),
+      aggregateAdminProjectAndCrewCounts(),
+    ]);
+
+    const payload = admins.map((a) => {
+      const pc = projectCrewCounts.get(a.id) ?? { projectCount: 0, crewCount: 0 };
+      const out = a.cancellationOutstanding;
+      const slots = a.cancellationSlotsRemaining;
+      return {
+        id: a.id,
+        firstname: a.firstname,
+        lastname: a.lastname,
+        email: a.email,
+        phone: a.phone,
+        projectsCount: pc.projectCount,
+        crewCount: pc.crewCount,
+        cancellationOutstanding:
+          typeof out === "number" && !Number.isNaN(out) ? out : null,
+        cancellationSlotsRemaining:
+          typeof slots === "number" && Number.isFinite(slots) ? Math.trunc(slots) : null,
+      };
+    });
+
+    return res.json({ admins: payload });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching admins:", error);

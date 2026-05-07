@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 import type { AirportLocation } from "./flightTicket.model";
+import { ProjectModel } from "./project.model";
 
 export enum CabinClass {
   Economy = "ECONOMY",
@@ -214,6 +215,23 @@ export async function deleteCrewTicket(id: string): Promise<boolean> {
 
 export async function countCrewTickets(): Promise<number> {
   return CrewTicketModel.countDocuments();
+}
+
+/** Crew tickets grouped by the admin who owns the ticket's project (`project.createdBy`). */
+export async function aggregateTicketCountsByAdmin(): Promise<Map<string, number>> {
+  const rows = await CrewTicketModel.aggregate<{ _id: mongoose.Types.ObjectId; c: number }>([
+    {
+      $lookup: {
+        from: ProjectModel.collection.name,
+        localField: "project_id",
+        foreignField: "_id",
+        as: "proj",
+      },
+    },
+    { $unwind: "$proj" },
+    { $group: { _id: "$proj.createdBy", c: { $sum: 1 } } },
+  ]);
+  return new Map(rows.map((r) => [r._id.toString(), r.c]));
 }
 
 export async function sumMarkupByProject(projectId: string): Promise<number> {
