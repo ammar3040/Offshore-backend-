@@ -854,6 +854,84 @@ function transformRiyaResponse(data: any, origin: string, destination: string) {
     .filter(Boolean);
 }
 
+type FlightSortBy = "price" | "duration" | "stops" | "departureTime" | "arrivalTime";
+type FlightSortOrder = "asc" | "desc";
+
+function durationToMinutes(duration: unknown): number | null {
+  if (typeof duration !== "string") return null;
+
+  const hoursMatch = duration.match(/(\d+)\s*h/i);
+  const minutesMatch = duration.match(/(\d+)\s*m/i);
+  const hours = hoursMatch ? Number(hoursMatch[1]) : 0;
+  const minutes = minutesMatch ? Number(minutesMatch[1]) : 0;
+
+  if (!hoursMatch && !minutesMatch) return null;
+  return hours * 60 + minutes;
+}
+
+function dateTimeToMs(value: unknown): number | null {
+  if (typeof value !== "string" || !value) return null;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+function flightDurationMinutes(flight: any): number | null {
+  const legs = Array.isArray(flight?.legs) ? flight.legs : [];
+  if (legs.length === 0) return null;
+
+  const durationSum = legs.reduce((sum: number, leg: any) => {
+    const minutes = durationToMinutes(leg?.duration);
+    return minutes == null ? sum : sum + minutes;
+  }, 0);
+
+  if (durationSum > 0) return durationSum;
+
+  const firstDeparture = dateTimeToMs(legs[0]?.departureTime);
+  const lastArrival = dateTimeToMs(legs[legs.length - 1]?.arrivalTime);
+  if (firstDeparture == null || lastArrival == null) return null;
+
+  return Math.max(0, Math.round((lastArrival - firstDeparture) / (1000 * 60)));
+}
+
+function flightSortValue(flight: any, sortBy: FlightSortBy): number | null {
+  const legs = Array.isArray(flight?.legs) ? flight.legs : [];
+  switch (sortBy) {
+    case "price": {
+      const fares = Array.isArray(flight?.fares) ? flight.fares : [];
+      const prices = fares
+        .map((fare: any) => Number(fare?.price ?? fare?.totalFare))
+        .filter((price: number) => Number.isFinite(price));
+      return prices.length > 0 ? Math.min(...prices) : null;
+    }
+    case "duration":
+      return flightDurationMinutes(flight);
+    case "stops":
+      return Number.isFinite(Number(flight?.stops)) ? Number(flight.stops) : null;
+    case "departureTime":
+      return dateTimeToMs(legs[0]?.departureTime);
+    case "arrivalTime":
+      return dateTimeToMs(legs[legs.length - 1]?.arrivalTime);
+    default:
+      return null;
+  }
+}
+
+function sortFlights(flights: any[], sortBy?: FlightSortBy, sortOrder: FlightSortOrder = "asc") {
+  if (!sortBy) return flights;
+
+  const direction = sortOrder === "desc" ? -1 : 1;
+  return flights
+    .map((flight, index) => ({ flight, index, value: flightSortValue(flight, sortBy) }))
+    .sort((a, b) => {
+      if (a.value == null && b.value == null) return a.index - b.index;
+      if (a.value == null) return 1;
+      if (b.value == null) return -1;
+      const diff = a.value - b.value;
+      return diff === 0 ? a.index - b.index : diff * direction;
+    })
+    .map(({ flight }) => flight);
+}
+
 async function fetchRiya(payload: any) {
   const response = await fetch(RIYA_URL, {
     method: "POST",
@@ -1121,6 +1199,8 @@ export async function searchFlightsController(req: import("express").Request, re
       crew_ids,
       page = 1,
       limit = 20,
+      sortBy,
+      sortOrder = "asc",
       departureTime: filterDepartureTime,
       arrivalDate: filterArrivalDate,
       arrivalTime: filterArrivalTime,
@@ -1335,7 +1415,11 @@ export async function searchFlightsController(req: import("express").Request, re
           stops: o.stops + r.stops,
         });
       }
-      const flights = results.filter(matchesTimeFilters).filter(matchesDirectOnly);
+      const flights = sortFlights(
+        results.filter(matchesTimeFilters).filter(matchesDirectOnly),
+        sortBy,
+        sortOrder
+      );
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
       const startIndex = (page - 1) * limit;
@@ -1360,9 +1444,13 @@ export async function searchFlightsController(req: import("express").Request, re
         )
       );
       const transformedData = transformRiyaResponse(data || {}, fromData.code, toData.code);
-      const flights = applyAdminLogic(transformedData)
-        .filter(matchesTimeFilters)
-        .filter(matchesDirectOnly);
+      const flights = sortFlights(
+        applyAdminLogic(transformedData)
+          .filter(matchesTimeFilters)
+          .filter(matchesDirectOnly),
+        sortBy,
+        sortOrder
+      );
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
       const startIndex = (page - 1) * limit;
