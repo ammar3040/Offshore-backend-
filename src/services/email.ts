@@ -105,9 +105,7 @@ function escapeHtml(s: string): string {
 }
 
 function buildItineraryHtml(legs: FlightLeg[]): string {
-  const labelStyle = "font-size:10px; color:#64748b; text-transform:uppercase; letter-spacing:1.2px; font-weight:600; padding-bottom:3px;";
-  const valueStyle = "font-size:14px; color:#f1f5f9; font-weight:500;";
-  const cards: string[] = [];
+  const rows: string[] = [];
 
   legs.forEach((leg, legIdx) => {
     const segments = leg.itinerary ?? [];
@@ -122,74 +120,46 @@ function buildItineraryHtml(legs: FlightLeg[]): string {
       const cabinVal = escapeHtml(seg.cabin ?? "—");
       const baggageVal = escapeHtml(seg.baggage ?? "—");
       const cabinBagVal = escapeHtml(seg.cabinBaggage ?? "—");
-      const segLabel = legs.length > 1 || segments.length > 1
-        ? `<div style="font-size:10px; color:#3b82f6; text-transform:uppercase; letter-spacing:1px; font-weight:700; padding-bottom:12px;">Segment ${legIdx + 1}.${segIdx + 1}</div>`
-        : "";
+      const segmentLabel = legs.length > 1 || segments.length > 1 ? `Segment ${legIdx + 1}.${segIdx + 1}` : "Flight";
 
-      cards.push(`
-        <div style="background:#1e293b; border-radius:12px; padding:20px; margin-bottom:12px;">
-          ${segLabel}
-          <!-- Flight number + route -->
-          <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
-            <tr>
-              <td style="padding-bottom:16px;" width="50%">
-                <div style="${labelStyle}">Flight</div>
-                <div style="font-size:16px; color:#60a5fa; font-weight:700;">${flightNum}</div>
-              </td>
-              <td style="padding-bottom:16px; text-align:right;" width="50%">
-                <div style="${labelStyle}">Cabin</div>
-                <div style="${valueStyle}">${cabinVal}</div>
-              </td>
-            </tr>
-          </table>
-          <!-- From/To -->
-          <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; background:#111827; border-radius:8px; padding:0;">
-            <tr>
-              <td style="padding:14px 16px;" width="40%">
-                <div style="${labelStyle}">From</div>
-                <div style="font-size:22px; font-weight:800; color:#f8fafc;">${fromCode}</div>
-                <div style="font-size:11px; color:#94a3b8; padding-top:2px;">${dep.date} &middot; ${dep.time}</div>
-              </td>
-              <td style="text-align:center; padding:14px 4px;" width="20%">
-                <div style="color:#3b82f6; font-size:18px;">&#10230;</div>
-              </td>
-              <td style="padding:14px 16px; text-align:right;" width="40%">
-                <div style="${labelStyle}">To</div>
-                <div style="font-size:22px; font-weight:800; color:#f8fafc;">${toCode}</div>
-                <div style="font-size:11px; color:#94a3b8; padding-top:2px;">${arr.date} &middot; ${arr.time}</div>
-              </td>
-            </tr>
-          </table>
-          <!-- Airport names -->
-          <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; padding-top:8px;">
-            <tr>
-              <td style="padding:10px 0 0; font-size:11px; color:#64748b; line-height:16px;" width="50%">${fromFull}</td>
-              <td style="padding:10px 0 0; font-size:11px; color:#64748b; line-height:16px; text-align:right;" width="50%">${toFull}</td>
-            </tr>
-          </table>
-          <!-- Baggage info -->
-          <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse; margin-top:14px; border-top:1px solid #334155; padding-top:12px;">
-            <tr>
-              <td style="padding-top:12px;" width="50%">
-                <div style="${labelStyle}">Check-in Baggage</div>
-                <div style="${valueStyle}">${baggageVal}</div>
-              </td>
-              <td style="padding-top:12px;" width="50%">
-                <div style="${labelStyle}">Cabin Baggage</div>
-                <div style="${valueStyle}">${cabinBagVal}</div>
-              </td>
-            </tr>
-          </table>
-        </div>
+      rows.push(`
+        <tr>
+          <td style="padding:13px 12px; border-bottom:1px solid #ececf1; color:#111827; font-size:12px; line-height:18px;">
+            <strong>${segmentLabel}</strong><br />
+            <span style="color:#6b7280;">${flightNum}</span>
+          </td>
+          <td style="padding:13px 12px; border-bottom:1px solid #ececf1; color:#111827; font-size:12px; line-height:18px;">
+            <strong>${fromCode} to ${toCode}</strong><br />
+            <span style="color:#6b7280;">${fromFull} / ${toFull}</span>
+          </td>
+          <td style="padding:13px 12px; border-bottom:1px solid #ececf1; color:#111827; font-size:12px; line-height:18px; text-align:center;">
+            <strong>${dep.date}</strong><br />
+            <span style="color:#6b7280;">${dep.time} - ${arr.time}</span>
+          </td>
+          <td style="padding:13px 12px; border-bottom:1px solid #ececf1; color:#111827; font-size:12px; line-height:18px; text-align:right;">
+            <strong>${cabinVal}</strong><br />
+            <span style="color:#6b7280;">Bag: ${baggageVal} / Cabin: ${cabinBagVal}</span>
+          </td>
+        </tr>
       `);
     });
   });
 
-  if (cards.length === 0) {
-    return '<div style="background:#1e293b; border-radius:12px; padding:20px; color:#94a3b8; font-size:14px;">No itinerary details available.</div>';
+  if (rows.length === 0) {
+    return '<div style="border:1px solid #ececf1; padding:14px 16px; color:#6b7280; font-size:12px;">No itinerary details available.</div>';
   }
 
-  return cards.join("");
+  return `
+    <table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+      <tr style="background-color:#4f46e5;">
+        <td style="padding:10px 12px; color:#ffffff; font-size:11px; font-weight:800; text-transform:uppercase;">Flight</td>
+        <td style="padding:10px 12px; color:#ffffff; font-size:11px; font-weight:800; text-transform:uppercase;">Description</td>
+        <td style="padding:10px 12px; color:#ffffff; font-size:11px; font-weight:800; text-transform:uppercase; text-align:center;">Time</td>
+        <td style="padding:10px 12px; color:#ffffff; font-size:11px; font-weight:800; text-transform:uppercase; text-align:right;">Details</td>
+      </tr>
+      ${rows.join("")}
+    </table>
+  `;
 }
 
 function getFlightTicketEmailHtml(
@@ -202,12 +172,13 @@ function getFlightTicketEmailHtml(
   const mjmlSource = fs.readFileSync(templatePath, "utf-8");
 
   const pdfLinkHtml = pdfUrl
-    ? `<div style="background:#1e293b; border-radius:10px; padding:16px 20px; margin-top:16px; border-left:3px solid #34d399;"><strong style="color:#34d399;">Your e-ticket PDF:</strong> <a href="${escapeHtml(pdfUrl)}" style="color:#60a5fa; text-decoration:underline;">Download ticket PDF</a></div>`
+    ? `<div style="border:1px solid #ececf1; background:#f9fafb; padding:13px 16px; color:#111827; font-size:12px;"><strong>Your e-ticket PDF:</strong> <a href="${escapeHtml(pdfUrl)}" style="color:#4f46e5; text-decoration:underline; font-weight:700;">Download ticket PDF</a></div>`
     : "";
 
   const firstLeg = flight.legs[0];
   const dep = formatFlightDateTime(firstLeg?.departureTime ?? firstLeg?.itinerary?.[0]?.departureTime);
   const arr = formatFlightDateTime(firstLeg?.arrivalTime ?? firstLeg?.itinerary?.[0]?.arrivalTime);
+  const issueDate = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
   const totalFare = flight.fares?.[0]?.totalFare ?? 0;
   const cabin = flight.fares?.[0]?.cabin ?? firstLeg?.itinerary?.[0]?.cabin ?? "Economy";
   const origin = firstLeg?.from ?? firstLeg?.itinerary?.[0]?.from ?? "—";
@@ -218,6 +189,7 @@ function getFlightTicketEmailHtml(
   const mjmlWithVars = mjmlSource
     .replace(/\{\{crewFirstname\}\}/g, crewFirstname)
     .replace(/\{\{bookingReference\}\}/g, flight.id)
+    .replace(/\{\{issueDate\}\}/g, issueDate)
     .replace(/\{\{airlineName\}\}/g, flight.airlineName ?? firstLeg?.airlineName ?? "—")
     .replace(/\{\{origin\}\}/g, fromAirport ? `${fromAirport.split(" - ")[0]?.trim() ?? origin}` : origin)
     .replace(/\{\{destination\}\}/g, toAirport ? `${toAirport.split(" - ")[0]?.trim() ?? dest}` : dest)
