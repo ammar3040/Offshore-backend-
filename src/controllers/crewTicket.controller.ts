@@ -9,6 +9,7 @@ import {
   findCrewTicketByProjectAndCrew,
   findCrewTicketById,
   findAllCrewTickets,
+  findCrewTicketsByAdminId,
   findCrewTicketsByCrewId,
   findCrewByCrewId,
   findProjectById,
@@ -23,9 +24,17 @@ import { getAdminSettings } from "../lib/admin-settings";
 import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { sendFlightTicketEmail, type FlightTicketData } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
-import { findRigDocumentById } from "../models/rig.model";
 import { fetchRiyaGetcity, normalizeRiyaAirports } from "../lib/riya-airports";
 import type { AuthenticatedRequest } from "../middleware/auth";
+import {
+  ACCESS_DENIED_MESSAGE,
+  crewOwnedByCaller,
+  isSuperAdmin,
+  projectOwnedByCaller,
+  projectOwnedByProject,
+  resolveOptionalRigAttachment,
+  ticketAccessibleByCaller,
+} from "../lib/resource-access";
 import {
   accrueCancellationDebtForDeletedCrewTicket,
   applyCancellationPaymentOnBook,
@@ -34,32 +43,17 @@ import {
   revertCancellationAccrual,
 } from "../services/cancellation-debt";
 
-/** Optional rig pointer; admins may only attach their own rigs unless superadmin. */
-async function resolveOptionalRigAttachment(
-  rigId: string | undefined,
-  actorUserId: string,
-  role: "crew" | "admin" | "superadmin"
-): Promise<
-  | { ok: true; rigObjectId: mongoose.Types.ObjectId | undefined }
-  | { ok: false; status: number; message: string }
-> {
-  if (rigId == null || rigId === "") return { ok: true, rigObjectId: undefined };
-  const doc = await findRigDocumentById(rigId);
-  if (!doc) return { ok: false, status: 404, message: "Rig not found." };
-  const ownerId = doc.createdBy as mongoose.Types.ObjectId;
-  if (role !== "superadmin" && ownerId.toString() !== actorUserId) {
-    return {
-      ok: false,
-      status: 403,
-      message: "You cannot assign a rig owned by another admin.",
-    };
-  }
-  return { ok: true, rigObjectId: new mongoose.Types.ObjectId(rigId) };
-}
-
-export async function getCrewTickets(_req: import("express").Request, res: Response) {
+export async function getCrewTickets(req: AuthenticatedRequest, res: Response) {
   try {
-    const tickets = await findAllCrewTickets();
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const tickets = isSuperAdmin(role)
+      ? await findAllCrewTickets()
+      : await findCrewTicketsByAdminId(userId);
     return res.json({ crewTickets: tickets });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -69,12 +63,46 @@ export async function getCrewTickets(_req: import("express").Request, res: Respo
 }
 
 export async function getCrewTicketsByCrewId(
-  req: import("express").Request<{ id: string }>,
+  req: AuthenticatedRequest & Request<{ id: string }>,
   res: Response
 ) {
   try {
-    const crewId = req.params.id; // id param is crew_id
-    const tickets = await findCrewTicketsByCrewId(crewId);
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const crewId = req.params.id;
+    if (role === "crew" && crewId !== userId) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+    if (role === "admin") {
+      const crewAllowed = await crewOwnedByCaller(crewId, userId, role);
+      if (!crewAllowed) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
+    }
+
+    const allTickets = await findCrewTicketsByCrewId(crewId);
+    const tickets =
+      role === "admin"
+        ? (
+            await Promise.all(
+              allTickets.map(async (ticket) => {
+                const projectId =
+                  typeof ticket.project_id === "object" &&
+                  ticket.project_id &&
+                  "_id" in (ticket.project_id as object)
+                    ? (ticket.project_id as { _id: { toString: () => string } })._id.toString()
+                    : String(ticket.project_id);
+                const allowed = await projectOwnedByCaller(projectId, userId, role);
+                return allowed ? ticket : null;
+              })
+            )
+          ).filter((t): t is NonNullable<typeof t> => t != null)
+        : allTickets;
+
     return res.json({ crewTickets: tickets });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -84,11 +112,26 @@ export async function getCrewTicketsByCrewId(
 }
 
 export async function getCrewTicketById(
-  req: import("express").Request<{ id: string }>,
+  req: AuthenticatedRequest & Request<{ id: string }>,
   res: Response
 ) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { id } = req.params;
+    const allowed = await ticketAccessibleByCaller(id, userId, role);
+    if (!allowed) {
+      const ticket = await findCrewTicketById(id);
+      if (!ticket) {
+        return res.status(404).json({ message: "Crew ticket not found." });
+      }
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     const ticket = await findCrewTicketById(id);
     if (!ticket) {
       return res.status(404).json({ message: "Crew ticket not found." });
@@ -138,6 +181,12 @@ export async function postCrewTicket(req: AuthenticatedRequest, res: Response) {
     if (!project) {
       return res.status(404).json({ message: "Project not found." });
     }
+    if (!projectOwnedByProject(project, actorUserId, role)) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+    if (!(await crewOwnedByCaller(body.crew_id, actorUserId, role))) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
     if (!crew) {
       return res.status(404).json({ message: "Crew not found." });
     }
@@ -183,11 +232,22 @@ export async function postCrewTicket(req: AuthenticatedRequest, res: Response) {
 }
 
 export async function uploadTicketPdf(
-  req: import("express").Request<{ id: string }> & { uploadedPdfUrl?: string },
+  req: AuthenticatedRequest & Request<{ id: string }> & { uploadedPdfUrl?: string },
   res: Response
 ) {
   try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { id } = req.params;
+    const allowed = await ticketAccessibleByCaller(id, actorUserId, role);
+    if (!allowed) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     const pdfUrl = req.uploadedPdfUrl;
     if (!pdfUrl) {
       return res.status(400).json({ message: "PDF upload failed or no file provided." });
@@ -216,6 +276,11 @@ export async function patchCrewTicket(req: AuthenticatedRequest & Request<{ id: 
     }
 
     const { id } = req.params;
+    const allowed = await ticketAccessibleByCaller(id, actorUserId, role);
+    if (!allowed) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     const body = req.body as Partial<{
       from: { Name: string; COUNTRY: string; COUNTRYNAME: string };
       to: { Name: string; COUNTRY: string; COUNTRYNAME: string };
@@ -383,6 +448,15 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
     const project = await findProjectById(body.project_id);
     if (!project) {
       return res.status(404).json({ message: "Project not found." });
+    }
+    if (!projectOwnedByProject(project, actorUserId, role)) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
+    for (const crewId of body.crew_ids) {
+      if (!(await crewOwnedByCaller(crewId, actorUserId, role))) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
     }
 
     const rigResolved = await resolveOptionalRigAttachment(body.rig_id, actorUserId, role);
@@ -583,11 +657,22 @@ function buildFlightDataFromCrewTicket(ticket: CrewTicket): FlightTicketData {
 }
 
 export async function sendTicketToCrewEmail(
-  req: import("express").Request<{ id: string }>,
+  req: AuthenticatedRequest & Request<{ id: string }>,
   res: Response
 ) {
   try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { id } = req.params;
+    const allowed = await ticketAccessibleByCaller(id, actorUserId, role);
+    if (!allowed) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     const ticket = await findCrewTicketById(id);
     if (!ticket) {
       return res.status(404).json({ message: "Crew ticket not found." });
@@ -624,11 +709,22 @@ export async function sendTicketToCrewEmail(
 }
 
 export async function deleteCrewTicketHandler(
-  req: import("express").Request<{ id: string }>,
+  req: AuthenticatedRequest & Request<{ id: string }>,
   res: Response
 ) {
   try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { id } = req.params;
+    const allowed = await ticketAccessibleByCaller(id, actorUserId, role);
+    if (!allowed) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     const ticket = await findCrewTicketById(id);
     if (!ticket) {
       return res.status(404).json({ message: "Crew ticket not found." });
@@ -1181,8 +1277,14 @@ function buildPayload(
   };
 }
 
-export async function searchFlightsController(req: import("express").Request, res: Response) {
+export async function searchFlightsController(req: AuthenticatedRequest, res: Response) {
   try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const body = req.body;
     const {
       tripType = "one-way",
@@ -1210,6 +1312,18 @@ export async function searchFlightsController(req: import("express").Request, re
 
     const crewIdsArray = Array.isArray(crew_ids) ? crew_ids : [];
 
+    if (project_id) {
+      const projectAllowed = await projectOwnedByCaller(String(project_id), actorUserId, role);
+      if (!projectAllowed) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
+    }
+    for (const crewId of crewIdsArray) {
+      if (!(await crewOwnedByCaller(String(crewId), actorUserId, role))) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
+    }
+
     const [adminSettings, superAdmin] = await Promise.all([
       getAdminSettings(),
       findFirstSuperAdmin(),
@@ -1217,7 +1331,7 @@ export async function searchFlightsController(req: import("express").Request, re
 
     const superAdminCashback = superAdmin?.cashback ?? null;
 
-    const adminIdForDebt = (req as AuthenticatedRequest).user?.userId;
+    const adminIdForDebt = actorUserId;
     const adminForDebt = adminIdForDebt ? await findAdminById(adminIdForDebt) : null;
     const installmentGbpForSearch = cancellationInstallmentGbp(
       adminForDebt?.cancellationOutstanding ?? 0,

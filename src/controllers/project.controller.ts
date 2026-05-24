@@ -2,6 +2,13 @@ import { Response } from "express";
 import mongoose from "mongoose";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import {
+  ACCESS_DENIED_MESSAGE,
+  allCrewOwnedByCaller,
+  isSuperAdmin,
+  projectOwnedByCaller,
+  projectOwnedByProject,
+} from "../lib/resource-access";
+import {
   createProject,
   createTimesheetForCrewProject,
   deleteProject,
@@ -16,10 +23,14 @@ import type { Project, ProjectDuration } from "../models/project.model";
 export async function getProjects(req: AuthenticatedRequest, res: Response) {
   try {
     const userId = req.user?.userId;
-    if (!userId) {
+    const role = req.user?.role;
+    if (!userId || !role) {
       return res.status(401).json({ message: "Authentication required." });
     }
-    const projects = await findAllProjects({ createdBy: userId });
+
+    const projects = isSuperAdmin(role)
+      ? await findAllProjects()
+      : await findAllProjects({ createdBy: userId });
     return res.json({ projects });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -28,12 +39,24 @@ export async function getProjects(req: AuthenticatedRequest, res: Response) {
   }
 }
 
-export async function getProjectById(req: import("express").Request<{ id: string }>, res: Response) {
+export async function getProjectById(
+  req: AuthenticatedRequest & { params: { id: string } },
+  res: Response
+) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { id } = req.params;
     const project = await findProjectById(id);
     if (!project) {
       return res.status(404).json({ message: "Project not found." });
+    }
+    if (!projectOwnedByProject(project, userId, role)) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
     }
     return res.json({ project });
   } catch (error) {
@@ -43,13 +66,26 @@ export async function getProjectById(req: import("express").Request<{ id: string
   }
 }
 
-export async function getProjectCrew(req: import("express").Request<{ id: string }>, res: Response) {
+export async function getProjectCrew(
+  req: AuthenticatedRequest & { params: { id: string } },
+  res: Response
+) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { id } = req.params;
     const project = await findProjectById(id);
     if (!project) {
       return res.status(404).json({ message: "Project not found." });
     }
+    if (!projectOwnedByProject(project, userId, role)) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     const participantIds = (project.participants ?? []).map((p) =>
       p instanceof mongoose.Types.ObjectId ? p : (p as { _id: mongoose.Types.ObjectId })._id
     );
@@ -80,6 +116,19 @@ export async function postProject(req: AuthenticatedRequest, res: Response) {
 
     const participants = (body.participants ?? []).map((id) => new mongoose.Types.ObjectId(id));
 
+    if (participants.length > 0) {
+      const crewAllowed = await allCrewOwnedByCaller(
+        participants.map((id) => id.toString()),
+        userId,
+        "admin"
+      );
+      if (!crewAllowed) {
+        return res.status(403).json({
+          message: "One or more crew members do not belong to your account.",
+        });
+      }
+    }
+
     const project = await createProject({
       title: body.title,
       description: body.description,
@@ -108,9 +157,26 @@ export async function postProject(req: AuthenticatedRequest, res: Response) {
   }
 }
 
-export async function patchProject(req: import("express").Request<{ id: string }>, res: Response) {
+export async function patchProject(
+  req: AuthenticatedRequest & { params: { id: string } },
+  res: Response
+) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { id } = req.params;
+    const existing = await findProjectById(id);
+    if (!existing) {
+      return res.status(404).json({ message: "Project not found." });
+    }
+    if (!projectOwnedByProject(existing, userId, role)) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     const body = req.body as Partial<{
       title: string;
       description: string;
@@ -125,11 +191,19 @@ export async function patchProject(req: import("express").Request<{ id: string }
     if (body.title !== undefined) updateData.title = body.title;
     if (body.description !== undefined) updateData.description = body.description;
     if (body.span !== undefined) updateData.span = body.span;
-    if (body.createdBy !== undefined) updateData.createdBy = new mongoose.Types.ObjectId(body.createdBy);
+    if (body.createdBy !== undefined && isSuperAdmin(role)) {
+      updateData.createdBy = new mongoose.Types.ObjectId(body.createdBy);
+    }
     if (body.status !== undefined) updateData.status = body.status;
     if (body.duration !== undefined) updateData.duration = body.duration;
     if (body.participants !== undefined) {
-      updateData.participants = body.participants.map((id) => new mongoose.Types.ObjectId(id));
+      const crewAllowed = await allCrewOwnedByCaller(body.participants, userId, role);
+      if (!crewAllowed) {
+        return res.status(403).json({
+          message: "One or more crew members do not belong to your account.",
+        });
+      }
+      updateData.participants = body.participants.map((pid) => new mongoose.Types.ObjectId(pid));
     }
 
     const project = await updateProject(id, updateData);
@@ -158,11 +232,25 @@ export async function patchProject(req: import("express").Request<{ id: string }
 }
 
 export async function deleteProjectHandler(
-  req: import("express").Request<{ id: string }>,
+  req: AuthenticatedRequest & { params: { id: string } },
   res: Response
 ) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { id } = req.params;
+    const existing = await findProjectById(id);
+    if (!existing) {
+      return res.status(404).json({ message: "Project not found." });
+    }
+    if (!projectOwnedByProject(existing, userId, role)) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     const deleted = await deleteProject(id);
     if (!deleted) {
       return res.status(404).json({ message: "Project not found." });

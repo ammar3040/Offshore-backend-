@@ -144,6 +144,21 @@ export async function findAllCrewTickets(): Promise<CrewTicket[]> {
   return docs.map((doc) => toCrewTicket(doc));
 }
 
+export async function findCrewTicketsByAdminId(adminId: string): Promise<CrewTicket[]> {
+  if (!mongoose.Types.ObjectId.isValid(adminId)) return [];
+  const projectDocs = await ProjectModel.find({
+    createdBy: new mongoose.Types.ObjectId(adminId),
+  }).select("_id");
+  const projectIds = projectDocs.map((p) => p._id);
+  if (projectIds.length === 0) return [];
+  const docs = await CrewTicketModel.find({ project_id: { $in: projectIds } })
+    .sort({ createdAt: -1 })
+    .populate("crew_id")
+    .populate("project_id")
+    .populate("rig_id");
+  return docs.map((doc) => toCrewTicket(doc));
+}
+
 export async function findCrewTicketByProjectAndCrew(
   projectId: string,
   crewId: string

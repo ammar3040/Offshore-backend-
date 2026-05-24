@@ -33,6 +33,13 @@ import { deleteTimesheetByCrewAndProject } from "../models/timesheet.model";
 import type { Crew } from "../models/crew.model";
 import { createAccessToken } from "../utils/jwt";
 import type { AuthenticatedRequest } from "../middleware/auth";
+import {
+  ACCESS_DENIED_MESSAGE,
+  crewOwnedByCaller,
+  isSuperAdmin,
+  projectOwnedByCaller,
+  projectOwnedByProject,
+} from "../lib/resource-access";
 
 type CrewFormPayload = Omit<Crew, "id" | "password">;
 
@@ -227,10 +234,16 @@ function crewAvailabilitySignal(activeProjects: Project[]): "GREEN" | "ORANGE" |
   return "RED";
 }
 
-export async function getCrew(_req: import("express").Request, res: Response) {
+export async function getCrew(req: AuthenticatedRequest, res: Response) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const [crew, activeByCrewId] = await Promise.all([
-      findAllCrew(),
+      isSuperAdmin(role) ? findAllCrew() : findAllCrew({ createdBy: userId }),
       findActiveProjectsGroupedByCrewId(),
     ]);
     const crewWithSignal = crew.map((c) => {
@@ -250,11 +263,26 @@ export async function getCrew(_req: import("express").Request, res: Response) {
 }
 
 export async function getCrewById(
-  req: import("express").Request<{ crew_id: string }>,
+  req: AuthenticatedRequest & { params: { crew_id: string } },
   res: Response
 ) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { crew_id } = req.params;
+
+    const allowed = await crewOwnedByCaller(crew_id, userId, role);
+    if (!allowed) {
+      const crew = await findCrewById(crew_id);
+      if (!crew) {
+        return res.status(404).json({ message: "Crew not found." });
+      }
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
 
     const [crew, assignedProjects] = await Promise.all([
       findCrewById(crew_id),
@@ -265,7 +293,11 @@ export async function getCrewById(
       return res.status(404).json({ message: "Crew not found." });
     }
 
-    return res.json({ crew, projects: assignedProjects });
+    const projects = isSuperAdmin(role)
+      ? assignedProjects
+      : assignedProjects.filter((p) => projectOwnedByProject(p, userId, role));
+
+    return res.json({ crew, projects });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching crew:", error);
@@ -274,25 +306,38 @@ export async function getCrewById(
 }
 
 export async function getCrewAvailableForProject(
-  req: import("express").Request<{ project_id: string }>,
+  req: AuthenticatedRequest & { params: { project_id: string } },
   res: Response
 ) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { project_id } = req.params;
 
     const project = await findProjectById(project_id);
     if (!project) {
       return res.status(404).json({ message: "Project not found." });
     }
+    if (!projectOwnedByProject(project, userId, role)) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
 
     const { startDate, endDate } = project.duration;
-    const [availableCrewIds, assignedCrewIds] = await Promise.all([
+    const [availableCrewIds, assignedCrewIds, ownedCrew] = await Promise.all([
       findCrewIdsWithAvailabilityOverlappingRange(new Date(startDate), new Date(endDate)),
       findCrewIdsWithAcceptedInvitesOverlappingRange(new Date(startDate), new Date(endDate)),
+      isSuperAdmin(role) ? findAllCrew() : findAllCrew({ createdBy: userId }),
     ]);
 
+    const ownedCrewIds = new Set(ownedCrew.map((c) => c.id));
     const assignedSet = new Set(assignedCrewIds.map((id) => id.toString()));
-    const unassignedCrewIds = availableCrewIds.filter((id) => !assignedSet.has(id.toString()));
+    const unassignedCrewIds = availableCrewIds.filter(
+      (id) => !assignedSet.has(id.toString()) && ownedCrewIds.has(id.toString())
+    );
 
     const crew = (
       await Promise.all(unassignedCrewIds.map((id) => findCrewById(id.toString())))
@@ -384,10 +429,15 @@ export async function loginCrew(
 }
 
 export async function postCrew(
-  req: import("express").Request & { files?: CrewFormFiles },
+  req: AuthenticatedRequest & { files?: CrewFormFiles },
   res: Response
 ) {
   try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const body = (req.body || {}) as Record<string, unknown>;
     const files = req.files || {};
 
@@ -403,7 +453,11 @@ export async function postCrew(
 
     const plainPassword = generateAlphanumericPassword(12);
     const hashedPassword = await bcrypt.hash(plainPassword, 10);
-    const crew = await createCrew({ ...result.data, password: hashedPassword });
+    const crew = await createCrew({
+      ...result.data,
+      password: hashedPassword,
+      createdBy: new mongoose.Types.ObjectId(userId),
+    });
 
     // eslint-disable-next-line no-console
     console.log("Crew created - generated password for", result.data.email, ":", plainPassword);
@@ -563,13 +617,28 @@ function buildCrewUpdateFromForm(
 }
 
 export async function patchCrew(
-  req: import("express").Request<{ crew_id: string }> & { files?: CrewFormFiles },
+  req: AuthenticatedRequest & { params: { crew_id: string }; files?: CrewFormFiles },
   res: Response
 ) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { crew_id } = req.params;
     const body = (req.body || {}) as Record<string, unknown>;
     const files = req.files || {};
+
+    const allowed = await crewOwnedByCaller(crew_id, userId, role);
+    if (!allowed) {
+      const crew = await findCrewById(crew_id);
+      if (!crew) {
+        return res.status(404).json({ message: "Crew not found." });
+      }
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
 
     const crew = await findCrewById(crew_id);
     if (!crew) {
@@ -641,11 +710,26 @@ export async function patchCrew(
 }
 
 export async function deleteCrewHandler(
-  req: import("express").Request<{ crew_id: string }>,
+  req: AuthenticatedRequest & { params: { crew_id: string } },
   res: Response
 ) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { crew_id } = req.params;
+
+    const allowed = await crewOwnedByCaller(crew_id, userId, role);
+    if (!allowed) {
+      const crew = await findCrewById(crew_id);
+      if (!crew) {
+        return res.status(404).json({ message: "Crew not found." });
+      }
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
 
     const crew = await findCrewById(crew_id);
     if (!crew) {
@@ -653,11 +737,14 @@ export async function deleteCrewHandler(
     }
 
     const assignedProjects = await findProjectsByParticipantCrewId(crew_id);
-    if (assignedProjects.length > 0) {
+    const ownedProjects = isSuperAdmin(role)
+      ? assignedProjects
+      : assignedProjects.filter((p) => projectOwnedByProject(p, userId, role));
+    if (ownedProjects.length > 0) {
       return res.status(409).json({
         message: "Remove crew from the assigned project(s) first.",
         assignedToProjects: true,
-        projects: assignedProjects.map((p) => ({ id: p.id, title: p.title })),
+        projects: ownedProjects.map((p) => ({ id: p.id, title: p.title })),
       });
     }
 
@@ -675,11 +762,25 @@ export async function deleteCrewHandler(
 }
 
 export async function unassignCrewFromProject(
-  req: import("express").Request<{ crew_id: string; project_id: string }>,
+  req: AuthenticatedRequest & { params: { crew_id: string; project_id: string } },
   res: Response
 ) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { crew_id, project_id } = req.params;
+
+    const [crewAllowed, projectAllowed] = await Promise.all([
+      crewOwnedByCaller(crew_id, userId, role),
+      projectOwnedByCaller(project_id, userId, role),
+    ]);
+    if (!crewAllowed || !projectAllowed) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
 
     const [crew, project] = await Promise.all([
       findCrewById(crew_id),

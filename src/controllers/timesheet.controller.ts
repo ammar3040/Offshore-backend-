@@ -2,6 +2,10 @@ import { Response } from "express";
 import mongoose from "mongoose";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import {
+  ACCESS_DENIED_MESSAGE,
+  projectOwnedByCaller,
+} from "../lib/resource-access";
+import {
   findProjectById,
   findTimesheetByCrewAndProject,
   findTimesheetById,
@@ -12,15 +16,32 @@ import {
 } from "../models";
 
 export async function getTimesheetById(
-  req: import("express").Request<{ id: string }>,
+  req: AuthenticatedRequest & { params: { id: string } },
   res: Response
 ) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { id } = req.params;
     const timesheet = await findTimesheetById(id);
     if (!timesheet) {
       return res.status(404).json({ message: "Timesheet not found." });
     }
+
+    const projectId =
+      typeof timesheet.project_id === "object" && timesheet.project_id && "_id" in timesheet.project_id
+        ? (timesheet.project_id as { _id: { toString: () => string } })._id.toString()
+        : String(timesheet.project_id);
+
+    const allowed = await projectOwnedByCaller(projectId, userId, role);
+    if (!allowed) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     return res.json({ timesheet });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -69,11 +90,22 @@ export async function getMyTimesheets(req: AuthenticatedRequest, res: Response) 
 }
 
 export async function getTimesheetsByProject(
-  req: import("express").Request<{ project_id: string }>,
+  req: AuthenticatedRequest & { params: { project_id: string } },
   res: Response
 ) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { project_id } = req.params;
+    const allowed = await projectOwnedByCaller(project_id, userId, role);
+    if (!allowed) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     const timesheets = await findTimesheetsByProject(project_id);
     return res.json({ timesheets });
   } catch (error) {

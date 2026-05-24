@@ -2,33 +2,29 @@ import mongoose from "mongoose";
 import { Response, type Request } from "express";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import {
+  ACCESS_DENIED_MESSAGE,
+  isSuperAdmin,
+  rigOwnedByCaller,
+} from "../lib/resource-access";
+import {
   createRig,
   deleteRig,
   findAllRigs,
   findRigById,
-  findRigDocumentById,
   updateRig,
 } from "../models/rig.model";
-
-async function rigOwnedByCaller(
-  rigId: string,
-  userId: string,
-  role: "admin" | "superadmin" | "crew"
-): Promise<boolean> {
-  if (role === "superadmin") return true;
-  const raw = await findRigDocumentById(rigId);
-  if (!raw) return false;
-  const ownerId = raw.createdBy as mongoose.Types.ObjectId;
-  return ownerId.toString() === userId;
-}
 
 export async function getRigs(req: AuthenticatedRequest, res: Response) {
   try {
     const userId = req.user?.userId;
-    if (!userId) {
+    const role = req.user?.role;
+    if (!userId || !role) {
       return res.status(401).json({ message: "Authentication required." });
     }
-    const rigs = await findAllRigs({ createdBy: userId });
+
+    const rigs = isSuperAdmin(role)
+      ? await findAllRigs()
+      : await findAllRigs({ createdBy: userId });
     return res.json({ rigs });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -37,9 +33,27 @@ export async function getRigs(req: AuthenticatedRequest, res: Response) {
   }
 }
 
-export async function getRigById(req: import("express").Request<{ id: string }>, res: Response) {
+export async function getRigById(
+  req: AuthenticatedRequest & Request<{ id: string }>,
+  res: Response
+) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { id } = req.params;
+    const allowed = await rigOwnedByCaller(id, userId, role);
+    if (!allowed) {
+      const rig = await findRigById(id);
+      if (!rig) {
+        return res.status(404).json({ message: "Rig not found." });
+      }
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     const rig = await findRigById(id);
     if (!rig) {
       return res.status(404).json({ message: "Rig not found." });
@@ -89,7 +103,7 @@ export async function patchRig(req: AuthenticatedRequest & Request<{ id: string 
 
     const allowed = await rigOwnedByCaller(id, userId, role);
     if (!allowed) {
-      return res.status(403).json({ message: "You do not have access to modify this rig." });
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
     }
 
     const updateData: Partial<{ name: string; description: string | undefined }> = {};
@@ -120,7 +134,7 @@ export async function deleteRigHandler(req: AuthenticatedRequest & Request<{ id:
 
     const allowed = await rigOwnedByCaller(id, userId, role);
     if (!allowed) {
-      return res.status(403).json({ message: "You do not have access to delete this rig." });
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
     }
 
     const deleted = await deleteRig(id);

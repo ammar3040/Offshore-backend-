@@ -10,12 +10,23 @@ import {
 } from "../models";
 import { findProjectById, updateProject } from "../models/project.model";
 import type { AuthenticatedRequest } from "../middleware/auth";
+import {
+  ACCESS_DENIED_MESSAGE,
+  crewOwnedByCaller,
+  projectOwnedByCaller,
+} from "../lib/resource-access";
 
 export async function inviteCrewToProject(
-  req: import("express").Request<{ project_id: string }>,
+  req: AuthenticatedRequest & { params: { project_id: string } },
   res: Response
 ) {
   try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { project_id } = req.params;
     const { crew_ids } = req.body as { crew_ids: string[] };
 
@@ -23,9 +34,23 @@ export async function inviteCrewToProject(
       return res.status(400).json({ message: "Invalid project_id." });
     }
 
+    const projectAllowed = await projectOwnedByCaller(project_id, userId, role);
+    if (!projectAllowed) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
     const project = await findProjectById(project_id);
     if (!project) {
       return res.status(404).json({ message: "Project not found." });
+    }
+
+    for (const crewId of crew_ids) {
+      const crewAllowed = await crewOwnedByCaller(crewId, userId, role);
+      if (!crewAllowed) {
+        return res.status(403).json({
+          message: "One or more crew members do not belong to your account.",
+        });
+      }
     }
 
     const projectObjectId = new mongoose.Types.ObjectId(project_id);
@@ -119,30 +144,34 @@ export async function acceptInvite(
 
     const invite = await acceptCrewInvite(userId, project_id);
     if (!invite) {
-      return res.status(404).json({ message: "Invite not found or already processed." });
+      return res.status(404).json({ message: "Invite not found or already accepted." });
     }
 
-    // Add crew to project participants and create timesheet
     const project = await findProjectById(project_id);
-    if (project) {
-      const crewObjectId = new mongoose.Types.ObjectId(userId);
-      const participantIds = project.participants as mongoose.Types.ObjectId[];
-      const isAlreadyParticipant = participantIds.some((p) => p.toString() === userId);
-      if (!isAlreadyParticipant) {
-        await updateProject(project_id, {
-          participants: [...participantIds, crewObjectId],
-        });
-      }
-      const startDate = new Date(project.duration.startDate);
-      const endDate = new Date(project.duration.endDate);
-      const projectObjectId = new mongoose.Types.ObjectId(project_id);
-      await createTimesheetForCrewProject(crewObjectId, projectObjectId, startDate, endDate);
+    if (!project) {
+      return res.status(404).json({ message: "Project not found." });
     }
 
-    return res.json({
-      message: "Invite accepted successfully.",
-      invite,
-    });
+    const participantIds = (project.participants ?? []).map((p) =>
+      p instanceof mongoose.Types.ObjectId ? p : (p as { _id: mongoose.Types.ObjectId })._id
+    );
+    const crewObjectId = new mongoose.Types.ObjectId(userId);
+    if (!participantIds.some((p) => p.toString() === userId)) {
+      await updateProject(project_id, {
+        participants: [...participantIds, crewObjectId],
+      });
+    }
+
+    const startDate = new Date(project.duration.startDate);
+    const endDate = new Date(project.duration.endDate);
+    await createTimesheetForCrewProject(
+      crewObjectId,
+      new mongoose.Types.ObjectId(project_id),
+      startDate,
+      endDate
+    );
+
+    return res.json({ message: "Invite accepted successfully.", invite });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error accepting invite:", error);

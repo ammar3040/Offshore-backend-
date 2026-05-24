@@ -31,6 +31,8 @@ export interface CrewCertificate {
 
 export interface Crew {
   id: string;
+  /** Admin who registered this crew member. */
+  createdBy?: mongoose.Types.ObjectId;
   firstname: string;
   lastname: string;
   dateOfBirth: string;
@@ -95,6 +97,7 @@ const crewCertificateSchema = new Schema<CrewCertificate>(
 
 const crewSchema = new Schema<CrewDocument>(
   {
+    createdBy: { type: Schema.Types.ObjectId, ref: "Admin", required: false },
     firstname: { type: String, required: true },
     lastname: { type: String, required: true },
     dateOfBirth: { type: String, required: true },
@@ -149,6 +152,7 @@ function normalizeCrewCertificates(
 function toCrew(doc: CrewDocument): CrewPublic {
   return {
     id: doc._id.toString(),
+    createdBy: doc.createdBy as mongoose.Types.ObjectId | undefined,
     firstname: doc.firstname,
     lastname: doc.lastname,
     dateOfBirth: doc.dateOfBirth,
@@ -213,9 +217,18 @@ export async function findCrewByEmailWithPassword(email: string): Promise<(CrewP
   return { ...toCrew(doc), password: doc.password };
 }
 
-export async function findAllCrew(): Promise<CrewPublic[]> {
-  const docs = await CrewModel.find().sort({ createdAt: -1 });
+export async function findAllCrew(filter?: {
+  createdBy?: string | mongoose.Types.ObjectId;
+}): Promise<CrewPublic[]> {
+  const query = filter?.createdBy ? { createdBy: filter.createdBy } : {};
+  const docs = await CrewModel.find(query).sort({ createdAt: -1 });
   return docs.map((doc) => toCrew(doc));
+}
+
+/** Raw document for ownership checks (`createdBy` is always ObjectId when set). */
+export async function findCrewDocumentById(id: string): Promise<CrewDocument | null> {
+  if (!mongoose.Types.ObjectId.isValid(id)) return null;
+  return CrewModel.findById(id);
 }
 
 export async function createCrew(data: Omit<Crew, "id">): Promise<CrewPublic> {

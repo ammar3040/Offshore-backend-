@@ -12,7 +12,7 @@ import {
   resetCrewPassword,
   unassignCrewFromProject,
 } from "../controllers";
-import { authenticateAdminOrSuperAdmin, authenticateCrew, authenticateSuperAdmin } from "../middleware/auth";
+import { authenticateAdmin, authenticateAdminOrSuperAdmin, authenticateCrew, authenticateSuperAdmin } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { crewUpload } from "../middleware/upload";
 import {
@@ -47,7 +47,7 @@ router.post("/login", loginCrew);
 router.patch("/reset-password", authenticateCrew, resetCrewPassword);
 
 // create crew
-router.post("/", crewUpload, uploadCrewFilesToCloudinary, postCrew);
+router.post("/", authenticateAdmin, crewUpload, uploadCrewFilesToCloudinary, postCrew);
 
 // update crew (supports multipart/form-data like create, or JSON)
 router.patch(

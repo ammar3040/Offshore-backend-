@@ -8,22 +8,27 @@ import {
   updateCrewAvailability,
 } from "../models/crewAvailability.model";
 import type { AuthenticatedRequest } from "../middleware/auth";
+import { ACCESS_DENIED_MESSAGE, crewOwnedByCaller } from "../lib/resource-access";
 
 export async function getCrewAvailabilities(req: AuthenticatedRequest, res: Response) {
   try {
     const userId = req.user?.userId;
     const role = req.user?.role;
 
-    if (!userId) {
+    if (!userId || !role) {
       return res.status(401).json({ message: "Authentication required." });
     }
 
     let crewId: string;
 
-    if (role === "admin") {
+    if (role === "admin" || role === "superadmin") {
       const { crew_id } = (req.query as { crew_id?: string }) || {};
       if (!crew_id) {
         return res.status(400).json({ message: "crew_id is required in query for admin." });
+      }
+      const allowed = await crewOwnedByCaller(crew_id, userId, role);
+      if (!allowed) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
       }
       crewId = crew_id;
     } else {
