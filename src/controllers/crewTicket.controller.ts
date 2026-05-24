@@ -1,4 +1,4 @@
-import { Response } from "express";
+import { Response, type Request } from "express";
 import { randomUUID } from "crypto";
 
 import mongoose from "mongoose";
@@ -23,6 +23,7 @@ import { getAdminSettings } from "../lib/admin-settings";
 import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { sendFlightTicketEmail, type FlightTicketData } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
+import { findRigDocumentById } from "../models/rig.model";
 import { fetchRiyaGetcity, normalizeRiyaAirports } from "../lib/riya-airports";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import {
@@ -32,6 +33,29 @@ import {
   cancellationInstallmentInCurrency,
   revertCancellationAccrual,
 } from "../services/cancellation-debt";
+
+/** Optional rig pointer; admins may only attach their own rigs unless superadmin. */
+async function resolveOptionalRigAttachment(
+  rigId: string | undefined,
+  actorUserId: string,
+  role: "crew" | "admin" | "superadmin"
+): Promise<
+  | { ok: true; rigObjectId: mongoose.Types.ObjectId | undefined }
+  | { ok: false; status: number; message: string }
+> {
+  if (rigId == null || rigId === "") return { ok: true, rigObjectId: undefined };
+  const doc = await findRigDocumentById(rigId);
+  if (!doc) return { ok: false, status: 404, message: "Rig not found." };
+  const ownerId = doc.createdBy as mongoose.Types.ObjectId;
+  if (role !== "superadmin" && ownerId.toString() !== actorUserId) {
+    return {
+      ok: false,
+      status: 403,
+      message: "You cannot assign a rig owned by another admin.",
+    };
+  }
+  return { ok: true, rigObjectId: new mongoose.Types.ObjectId(rigId) };
+}
 
 export async function getCrewTickets(_req: import("express").Request, res: Response) {
   try {
@@ -77,11 +101,18 @@ export async function getCrewTicketById(
   }
 }
 
-export async function postCrewTicket(req: import("express").Request, res: Response) {
+export async function postCrewTicket(req: AuthenticatedRequest, res: Response) {
   try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const body = req.body as {
       crew_id: string;
       project_id: string;
+      rig_id?: string;
       from: { Name: string; COUNTRY: string; COUNTRYNAME: string };
       to: { Name: string; COUNTRY: string; COUNTRYNAME: string };
       class: string;
@@ -118,9 +149,15 @@ export async function postCrewTicket(req: import("express").Request, res: Respon
       });
     }
 
+    const rigResolved = await resolveOptionalRigAttachment(body.rig_id, actorUserId, role);
+    if (!rigResolved.ok) {
+      return res.status(rigResolved.status).json({ message: rigResolved.message });
+    }
+
     const ticket = await createCrewTicket({
       crew_id: new mongoose.Types.ObjectId(body.crew_id),
       project_id: new mongoose.Types.ObjectId(body.project_id),
+      ...(rigResolved.rigObjectId ? { rig_id: rigResolved.rigObjectId } : {}),
       from: body.from,
       to: body.to,
       class: body.class as import("../models/crewTicket.model").CabinClass,
@@ -170,11 +207,14 @@ export async function uploadTicketPdf(
   }
 }
 
-export async function patchCrewTicket(
-  req: import("express").Request<{ id: string }>,
-  res: Response
-) {
+export async function patchCrewTicket(req: AuthenticatedRequest & Request<{ id: string }>, res: Response) {
   try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const { id } = req.params;
     const body = req.body as Partial<{
       from: { Name: string; COUNTRY: string; COUNTRYNAME: string };
@@ -186,9 +226,23 @@ export async function patchCrewTicket(
       trip: TripType;
       price: number;
       cashback: number;
+      rig_id: string;
     }>;
 
-    const updateData: Partial<Omit<import("../models/crewTicket.model").CrewTicket, "id" | "crew_id" | "project_id">> = {};
+    const updateData: Partial<Omit<import("../models/crewTicket.model").CrewTicket, "id" | "crew_id" | "project_id">> =
+      {};
+
+    if (body.rig_id !== undefined) {
+      const rigResolved = await resolveOptionalRigAttachment(body.rig_id, actorUserId, role);
+      if (!rigResolved.ok) {
+        return res.status(rigResolved.status).json({ message: rigResolved.message });
+      }
+      if (rigResolved.rigObjectId) {
+        updateData.rig_id = rigResolved.rigObjectId;
+      }
+      // Omit rig_id update if resolver returned undefined — cannot clear rig via PATCH in minimal scope
+    }
+
     if (body.from !== undefined) updateData.from = body.from;
     if (body.to !== undefined) updateData.to = body.to;
     if (body.class !== undefined) updateData.class = body.class;
@@ -287,10 +341,17 @@ function parseTravelBoundsFromBookFlight(legs: unknown): { travelStart: Date; tr
   return { travelStart, travelEnd };
 }
 
-export async function bookFlight(req: import("express").Request, res: Response) {
+export async function bookFlight(req: AuthenticatedRequest, res: Response) {
   try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
     const body = req.body as {
       project_id: string;
+      rig_id?: string;
       crew_ids: string[];
       flight: {
         id: string;
@@ -322,6 +383,11 @@ export async function bookFlight(req: import("express").Request, res: Response) 
     const project = await findProjectById(body.project_id);
     if (!project) {
       return res.status(404).json({ message: "Project not found." });
+    }
+
+    const rigResolved = await resolveOptionalRigAttachment(body.rig_id, actorUserId, role);
+    if (!rigResolved.ok) {
+      return res.status(rigResolved.status).json({ message: rigResolved.message });
     }
 
     const admin = project.createdBy;
@@ -439,6 +505,7 @@ export async function bookFlight(req: import("express").Request, res: Response) 
       const ticket = await createCrewTicket({
         crew_id: new mongoose.Types.ObjectId(crewId),
         project_id: new mongoose.Types.ObjectId(body.project_id),
+        ...(rigResolved.rigObjectId ? { rig_id: rigResolved.rigObjectId } : {}),
         from,
         to,
         class: cabinClass,

@@ -18,6 +18,8 @@ export interface CrewTicket {
   id: string;
   crew_id: mongoose.Types.ObjectId;
   project_id: mongoose.Types.ObjectId;
+  /** Oil rig assignment (optional). */
+  rig_id?: mongoose.Types.ObjectId;
   from: AirportLocation;
   to: AirportLocation;
   class: CabinClass;
@@ -58,6 +60,7 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
   {
     crew_id: { type: Schema.Types.ObjectId, ref: "Crew", required: true },
     project_id: { type: Schema.Types.ObjectId, ref: "Project", required: true },
+    rig_id: { type: Schema.Types.ObjectId, ref: "Rig", required: false },
     from: { type: airportLocationSchema, required: true },
     to: { type: airportLocationSchema, required: true },
     class: {
@@ -85,6 +88,7 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
 );
 
 crewTicketSchema.index({ project_id: 1, crew_id: 1 });
+crewTicketSchema.index({ rig_id: 1 });
 
 const CrewTicketModel: Model<CrewTicketDocument> =
   mongoose.models.CrewTicket ?? mongoose.model<CrewTicketDocument>("CrewTicket", crewTicketSchema);
@@ -94,6 +98,7 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     id: doc._id.toString(),
     crew_id: doc.crew_id,
     project_id: doc.project_id,
+    rig_id: doc.rig_id,
     from: doc.from,
     to: doc.to,
     class: doc.class as CabinClass,
@@ -115,7 +120,8 @@ export async function findCrewTicketById(id: string): Promise<CrewTicket | null>
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
   const doc = await CrewTicketModel.findById(id)
     .populate("crew_id")
-    .populate("project_id");
+    .populate("project_id")
+    .populate("rig_id");
   return doc ? toCrewTicket(doc) : null;
 }
 
@@ -124,7 +130,8 @@ export async function findCrewTicketsByCrewId(crewId: string): Promise<CrewTicke
   const docs = await CrewTicketModel.find({ crew_id: crewId })
     .sort({ createdAt: -1 })
     .populate("crew_id")
-    .populate("project_id");
+    .populate("project_id")
+    .populate("rig_id");
   return docs.map((doc) => toCrewTicket(doc));
 }
 
@@ -132,7 +139,8 @@ export async function findAllCrewTickets(): Promise<CrewTicket[]> {
   const docs = await CrewTicketModel.find()
     .sort({ createdAt: -1 })
     .populate("crew_id")
-    .populate("project_id");
+    .populate("project_id")
+    .populate("rig_id");
   return docs.map((doc) => toCrewTicket(doc));
 }
 
@@ -192,7 +200,8 @@ export async function createCrewTicket(data: Omit<CrewTicket, "id">): Promise<Cr
   const doc = await CrewTicketModel.create(data);
   const populated = await CrewTicketModel.findById(doc._id)
     .populate("crew_id")
-    .populate("project_id");
+    .populate("project_id")
+    .populate("rig_id");
   return toCrewTicket(populated ?? doc);
 }
 
@@ -203,7 +212,8 @@ export async function updateCrewTicket(
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
   const doc = await CrewTicketModel.findByIdAndUpdate(id, data, { new: true })
     .populate("crew_id")
-    .populate("project_id");
+    .populate("project_id")
+    .populate("rig_id");
   return doc ? toCrewTicket(doc) : null;
 }
 

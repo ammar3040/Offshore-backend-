@@ -8,6 +8,7 @@ import crewInviteRoutes from "./crewInvite.routes";
 import crewTicketRoutes from "./crewTicket.routes";
 import crewRoutes from "./crew.route";
 import projectRoutes from "./project.routes";
+import rigRoutes from "./rig.routes";
 import timesheetRoutes from "./timesheet.routes";
 
 const router = Router();
@@ -26,6 +27,7 @@ router.use("/crew-availability", crewAvailabilityRoutes);
 router.use("/crew-invite", crewInviteRoutes);
 router.use("/crew-ticket", crewTicketRoutes);
 router.use("/project", projectRoutes);
+router.use("/rig", rigRoutes);
 router.use("/timesheet", timesheetRoutes);
 
 export default router;

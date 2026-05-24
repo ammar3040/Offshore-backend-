@@ -37,6 +37,7 @@ export const createCrewTicketSchema = Joi.object({
     }),
   price: Joi.number().min(0).default(0),
   cashback: Joi.number().min(0).default(0),
+  rig_id: objectId.optional(),
 });
 
 export const updateCrewTicketSchema = Joi.object({
@@ -53,6 +54,7 @@ export const updateCrewTicketSchema = Joi.object({
     .optional(),
   price: Joi.number().min(0).optional(),
   cashback: Joi.number().min(0).optional(),
+  rig_id: objectId.optional(),
 }).min(1).messages({
   "object.min": "At least one field is required for update",
 });
@@ -139,4 +141,5 @@ export const bookFlightSchema = Joi.object({
   price: Joi.number().min(0).default(0),
   /** Currency of price, cashback (e.g. from search). Default GBP. */
   currency: Joi.string().trim().length(3).default("GBP"),
+  rig_id: objectId.optional(),
 });
