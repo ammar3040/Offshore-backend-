@@ -26,6 +26,7 @@ import { projectRigObjectId } from "../models/project.model";
 import { sendFlightTicketEmail, type FlightTicketData } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
 import { fetchRiyaGetcity, normalizeRiyaAirports, type RiyaAirportItem } from "../lib/riya-airports";
+import { distanceKmBetween, getAirportCoordinatesByIata } from "../lib/airport-coordinates";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import {
   ACCESS_DENIED_MESSAGE,
@@ -1713,20 +1714,48 @@ function dedupeNestedAirportResults(airports: AirportSearchResult[]): AirportSea
   });
 }
 
-/** When airportroutes is blocked, attach other Riya hits in the same country as nearby options. */
-function enrichNearbyFromRiyaSiblings(airports: AirportSearchResult[]): AirportSearchResult[] {
-  const enriched = airports.map((airport, index) => {
-    if (index >= NEARBY_PARENT_LIMIT) return airport;
-    const code = airport.Code.trim().toUpperCase();
-    const country = airport.CountryCode.trim().toUpperCase();
-    const nearbyAirports = airports
-      .filter((other) => {
-        const otherCode = other.Code.trim().toUpperCase();
-        return otherCode && otherCode !== code && other.CountryCode.trim().toUpperCase() === country;
-      })
-      .slice(0, NEARBY_AIRPORT_LIMIT);
-    return nearbyAirports.length > 0 ? { ...airport, nearbyAirports } : airport;
-  });
+/** When airportroutes is blocked, attach other Riya hits with haversine distance from a public IATA dataset. */
+async function enrichNearbyFromRiyaSiblings(
+  airports: AirportSearchResult[]
+): Promise<AirportSearchResult[]> {
+  const enriched = await Promise.all(
+    airports.map(async (airport, index) => {
+      if (index >= NEARBY_PARENT_LIMIT) return airport;
+      const code = airport.Code.trim().toUpperCase();
+      const country = airport.CountryCode.trim().toUpperCase();
+      const parentCoords = await getAirportCoordinatesByIata(code);
+
+      const nearbyAirports = (
+        await Promise.all(
+          airports
+            .filter((other) => {
+              const otherCode = other.Code.trim().toUpperCase();
+              return (
+                otherCode &&
+                otherCode !== code &&
+                other.CountryCode.trim().toUpperCase() === country
+              );
+            })
+            .map(async (other) => {
+              const otherCoords = await getAirportCoordinatesByIata(other.Code);
+              if (!parentCoords || !otherCoords) return other;
+              const distanceKm = Math.round(
+                distanceKmBetween(parentCoords, otherCoords)
+              );
+              if (distanceKm > NEARBY_AIRPORT_RADIUS_KM) return null;
+              return { ...other, distanceKm };
+            })
+        )
+      )
+        .filter((airport): airport is AirportSearchResult => airport !== null)
+        .sort(
+          (a, b) => (a.distanceKm ?? Number.MAX_SAFE_INTEGER) - (b.distanceKm ?? Number.MAX_SAFE_INTEGER)
+        )
+        .slice(0, NEARBY_AIRPORT_LIMIT);
+
+      return nearbyAirports.length > 0 ? { ...airport, nearbyAirports } : airport;
+    })
+  );
   return dedupeNestedAirportResults(enriched);
 }
 
@@ -1777,19 +1806,6 @@ function airportCoordinates(hit: AirportroutesCountryHit): { lat: number; lng: n
   const lng = hit._geo?.lng ?? hit.lon;
   if (typeof lat !== "number" || typeof lng !== "number") return null;
   return { lat, lng };
-}
-
-function distanceKmBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
-  const earthRadiusKm = 6371;
-  const toRadians = (value: number) => (value * Math.PI) / 180;
-  const dLat = toRadians(b.lat - a.lat);
-  const dLng = toRadians(b.lng - a.lng);
-  const lat1 = toRadians(a.lat);
-  const lat2 = toRadians(b.lat);
-  const h =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
-  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
 async function fetchAirportroutesSearchHits(query: string, limit = 10): Promise<AirportroutesCountryHit[]> {
