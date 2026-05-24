@@ -1383,8 +1383,11 @@ export async function searchFlightsController(req: import("express").Request, re
 export interface AirportSearchResult {
   Name: string;
   Code: string;
+  AirportName?: string;
   CountryCode: string;
   CountryName: string;
+  distanceKm?: number;
+  nearbyAirports?: AirportSearchResult[];
   /** @deprecated Use CountryCode */
   COUNTRY?: string;
   /** @deprecated Use CountryName */
@@ -1433,9 +1436,21 @@ type AirportroutesCountryHit = {
   iata?: string;
   name?: string;
   city?: string;
+  country?: string;
+  country_code?: string;
   scheduled_service?: boolean;
   type?: string;
+  _geo?: {
+    lat?: number;
+    lng?: number;
+  };
+  lat?: number;
+  lon?: number;
 };
+
+const NEARBY_AIRPORT_RADIUS_KM = 100;
+const NEARBY_AIRPORT_LIMIT = 5;
+const NEARBY_PARENT_LIMIT = 5;
 
 /** Prefer commercial-ish rows; still include ICAO-only if scheduled at a paved field */
 function airportroutesCountryRowSelectable(hit: AirportroutesCountryHit): boolean {
@@ -1460,11 +1475,135 @@ function airportroutesCountryRowToSearchResult(hit: AirportroutesCountryHit, cou
   return {
     Name: name,
     Code: code,
+    AirportName: placeName,
     CountryCode: countryIso2,
     CountryName: countryDisplayName,
     COUNTRY: countryIso2,
     COUNTRYNAME: countryDisplayName,
   };
+}
+
+function airportroutesHitToSearchResult(hit: AirportroutesCountryHit, distanceKm?: number): AirportSearchResult | null {
+  const countryCode = (hit.country_code ?? hit.country ?? "").trim().toUpperCase();
+  const countryName = COUNTRY_NAMES[countryCode] ?? countryCode;
+  const mapped = airportroutesCountryRowToSearchResult(hit, countryCode, countryName);
+  if (!mapped) return null;
+  return {
+    ...mapped,
+    ...(distanceKm == null ? {} : { distanceKm: Math.round(distanceKm) }),
+  };
+}
+
+function airportCoordinates(hit: AirportroutesCountryHit): { lat: number; lng: number } | null {
+  const lat = hit._geo?.lat ?? hit.lat;
+  const lng = hit._geo?.lng ?? hit.lon;
+  if (typeof lat !== "number" || typeof lng !== "number") return null;
+  return { lat, lng };
+}
+
+function distanceKmBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const earthRadiusKm = 6371;
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const dLat = toRadians(b.lat - a.lat);
+  const dLng = toRadians(b.lng - a.lng);
+  const lat1 = toRadians(a.lat);
+  const lat2 = toRadians(b.lat);
+  const h =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+async function fetchAirportroutesSearchHits(query: string, limit = 10): Promise<AirportroutesCountryHit[]> {
+  const res = await fetch(
+    `https://www.airportroutes.com/api/search-airports/?q=${encodeURIComponent(query)}&limit=${limit}`
+  );
+  if (!res.ok) return [];
+  const data = (await res.json()) as { hits?: AirportroutesCountryHit[] };
+  return data.hits ?? [];
+}
+
+async function resolveAirportroutesAirport(airport: AirportSearchResult): Promise<AirportroutesCountryHit | null> {
+  const code = airport.Code.trim().toUpperCase();
+  const hits = await fetchAirportroutesSearchHits(code || airport.Name, 10);
+  const countryCode = airport.CountryCode.trim().toUpperCase();
+  const exactCodeHit = code ? hits.find((hit) => {
+    const iata = (hit.iata ?? "").trim().toUpperCase();
+    const icao = (hit.icao ?? "").trim().toUpperCase();
+    const hitCountry = (hit.country_code ?? hit.country ?? "").trim().toUpperCase();
+    return (iata === code || icao === code) && (!countryCode || hitCountry === countryCode);
+  }) : undefined;
+  return exactCodeHit ?? hits.find((hit) => airportCoordinates(hit)) ?? null;
+}
+
+async function fetchNearbyAirports(parentHit: AirportroutesCountryHit, parentCode: string): Promise<AirportSearchResult[]> {
+  const parentCoordinates = airportCoordinates(parentHit);
+  if (!parentCoordinates) return [];
+
+  const res = await fetch(
+    `https://www.airportroutes.com/api/geosearch-airports/?lat=${parentCoordinates.lat}&lng=${parentCoordinates.lng}&radius=${NEARBY_AIRPORT_RADIUS_KM}`
+  );
+  if (!res.ok) return [];
+
+  const parentCodeUpper = parentCode.trim().toUpperCase();
+  const data = (await res.json()) as unknown;
+  const hits = Array.isArray(data) ? (data as AirportroutesCountryHit[]) : [];
+  return hits
+    .filter(airportroutesCountryRowSelectable)
+    .map((hit) => {
+      const coordinates = airportCoordinates(hit);
+      if (!coordinates) return null;
+      const code = ((hit.iata ?? "").trim().toUpperCase() || (hit.icao ?? "").trim().toUpperCase());
+      if (!code || code === parentCodeUpper) return null;
+      const distanceKm = distanceKmBetween(parentCoordinates, coordinates);
+      return { hit, distanceKm };
+    })
+    .filter((item): item is { hit: AirportroutesCountryHit; distanceKm: number } => item !== null)
+    .sort((a, b) => a.distanceKm - b.distanceKm)
+    .map(({ hit, distanceKm }) => airportroutesHitToSearchResult(hit, distanceKm))
+    .filter((airport): airport is AirportSearchResult => airport !== null)
+    .slice(0, NEARBY_AIRPORT_LIMIT);
+}
+
+async function enrichAirportsWithNearby(airports: AirportSearchResult[]): Promise<AirportSearchResult[]> {
+  const enriched = await Promise.all(
+    airports.map(async (airport, index) => {
+      if (index >= NEARBY_PARENT_LIMIT) return airport;
+      try {
+        const parentHit = await resolveAirportroutesAirport(airport);
+        if (!parentHit) return airport;
+        const nearbyAirports = await fetchNearbyAirports(parentHit, airport.Code);
+        return {
+          ...airport,
+          AirportName: airport.AirportName ?? parentHit.name,
+          ...(nearbyAirports.length > 0 ? { nearbyAirports } : {}),
+        };
+      } catch {
+        return airport;
+      }
+    })
+  );
+
+  const nestedCodes = new Set<string>();
+  return enriched.filter((airport) => {
+    const code = airport.Code.trim().toUpperCase();
+    if (code && nestedCodes.has(code)) return false;
+    for (const nearbyAirport of airport.nearbyAirports ?? []) {
+      const nearbyCode = nearbyAirport.Code.trim().toUpperCase();
+      if (nearbyCode) nestedCodes.add(nearbyCode);
+    }
+    return true;
+  });
+}
+
+function prioritizeExactAirportMatch(airports: AirportSearchResult[], query: string): AirportSearchResult[] {
+  const codeQuery = query.trim().toUpperCase();
+  if (!/^[A-Z]{3,4}$/.test(codeQuery)) return airports;
+  return [...airports].sort((a, b) => {
+    const aExact = a.Code.trim().toUpperCase() === codeQuery ? 0 : 1;
+    const bExact = b.Code.trim().toUpperCase() === codeQuery ? 0 : 1;
+    return aExact - bExact;
+  });
 }
 
 /** Paginate AirportRoutes `/countries/{code}/airports/` so typing a country returns its airports/cities */
@@ -1581,7 +1720,7 @@ export async function searchAirports(req: import("express").Request, res: Respon
       };
     });
 
-    return res.json(airports);
+    return res.json(await enrichAirportsWithNearby(prioritizeExactAirportMatch(airports, query)));
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error searching airports:", error);
