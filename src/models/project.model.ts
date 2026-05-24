@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 import type { AdminPublic } from "./admin.model";
+import type { Rig } from "./rig.model";
 
 function isPopulatedAdmin(
   val: unknown
@@ -64,10 +65,28 @@ export interface Project {
   status: ProjectStatus;
   createdBy: mongoose.Types.ObjectId | AdminPublic; // Admin reference (ObjectId when unpopulated, admin object when populated)
   participants: mongoose.Types.ObjectId[]; // crew_ids references
+  /** Oil rig assignment (optional). */
+  rig_id?: mongoose.Types.ObjectId | Rig;
 }
 
 export interface ProjectDocument extends Omit<Project, "id">, Document {
   _id: mongoose.Types.ObjectId;
+}
+
+/** Resolve project rig_id to ObjectId whether populated or not. */
+export function projectRigObjectId(project: Pick<Project, "rig_id">): mongoose.Types.ObjectId | undefined {
+  const rig = project.rig_id;
+  if (!rig) return undefined;
+  if (rig instanceof mongoose.Types.ObjectId) return rig;
+  if (typeof rig === "object") {
+    if ("_id" in rig && rig._id instanceof mongoose.Types.ObjectId) {
+      return rig._id;
+    }
+    if ("id" in rig && typeof (rig as Rig).id === "string") {
+      return new mongoose.Types.ObjectId((rig as Rig).id);
+    }
+  }
+  return undefined;
 }
 
 const projectDurationSchema = new Schema<ProjectDuration>(
@@ -91,9 +110,12 @@ const projectSchema = new Schema<ProjectDocument>(
     },
     createdBy: { type: Schema.Types.ObjectId, ref: "Admin", required: true },
     participants: { type: [{ type: Schema.Types.ObjectId, ref: "Crew" }], default: [] },
+    rig_id: { type: Schema.Types.ObjectId, ref: "Rig", required: false },
   },
   { timestamps: true }
 );
+
+projectSchema.index({ rig_id: 1 });
 
 export const ProjectModel: Model<ProjectDocument> =
   mongoose.models.Project ?? mongoose.model<ProjectDocument>("Project", projectSchema);
@@ -110,6 +132,7 @@ function toProject(doc: ProjectDocument): Project {
       ? toAdminPublic(doc.createdBy)
       : (doc.createdBy as mongoose.Types.ObjectId),
     participants: doc.participants,
+    ...(doc.rig_id ? { rig_id: doc.rig_id as mongoose.Types.ObjectId | Rig } : {}),
   };
 }
 
@@ -117,7 +140,8 @@ export async function findProjectById(id: string): Promise<Project | null> {
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
   const doc = await ProjectModel.findById(id)
     .populate("participants")
-    .populate("createdBy");
+    .populate("createdBy")
+    .populate("rig_id");
   return doc ? toProject(doc) : null;
 }
 
@@ -126,28 +150,35 @@ export async function findAllProjects(filter?: { createdBy?: string | mongoose.T
   const docs = await ProjectModel.find(query)
     .sort({ createdAt: -1 })
     .populate("participants")
-    .populate("createdBy");
+    .populate("createdBy")
+    .populate("rig_id");
   return docs.map((doc) => toProject(doc));
 }
 
 export async function createProject(
-  data: Omit<Project, "id" | "status" | "participants"> & { status?: ProjectStatus; participants?: mongoose.Types.ObjectId[] }
+  data: Omit<Project, "id" | "status" | "participants" | "rig_id"> & {
+    status?: ProjectStatus;
+    participants?: mongoose.Types.ObjectId[];
+    rig_id?: mongoose.Types.ObjectId;
+  }
 ): Promise<Project> {
   const doc = await ProjectModel.create(data);
   const populated = await ProjectModel.findById(doc._id)
     .populate("participants")
-    .populate("createdBy");
+    .populate("createdBy")
+    .populate("rig_id");
   return toProject(populated ?? doc);
 }
 
 export async function updateProject(
   id: string,
-  data: Partial<Omit<Project, "id">>
+  data: Partial<Omit<Project, "id" | "rig_id">> & { rig_id?: mongoose.Types.ObjectId | null }
 ): Promise<Project | null> {
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
   const doc = await ProjectModel.findByIdAndUpdate(id, data, { new: true })
     .populate("participants")
-    .populate("createdBy");
+    .populate("createdBy")
+    .populate("rig_id");
   return doc ? toProject(doc) : null;
 }
 
@@ -202,7 +233,8 @@ export async function findProjectsByParticipantCrewId(crewId: string): Promise<P
   const docs = await ProjectModel.find({ participants: crewObjectId })
     .sort({ createdAt: -1 })
     .populate("participants")
-    .populate("createdBy");
+    .populate("createdBy")
+    .populate("rig_id");
   return docs.map((doc) => toProject(doc));
 }
 

@@ -32,6 +32,7 @@ export const createProjectSchema = Joi.object({
     "any.required": "span is required",
   }),
   participants: Joi.array().items(objectId).default([]),
+  rig_id: objectId.optional(),
   status: Joi.string()
     .valid(...Object.values(ProjectStatus))
     .default(ProjectStatus.Active),
@@ -44,6 +45,7 @@ export const updateProjectSchema = Joi.object({
   span: Joi.string().trim().optional(),
   createdBy: objectId.optional(),
   participants: Joi.array().items(objectId).optional(),
+  rig_id: objectId.optional().allow(null, ""),
   status: Joi.string()
     .valid(...Object.values(ProjectStatus))
     .optional(),

@@ -7,6 +7,7 @@ import {
   isSuperAdmin,
   projectOwnedByCaller,
   projectOwnedByProject,
+  resolveOptionalRigAttachment,
 } from "../lib/resource-access";
 import {
   createProject,
@@ -111,6 +112,7 @@ export async function postProject(req: AuthenticatedRequest, res: Response) {
       duration: ProjectDuration;
       span: string;
       participants?: string[];
+      rig_id?: string;
       status?: ProjectStatus;
     };
 
@@ -129,6 +131,11 @@ export async function postProject(req: AuthenticatedRequest, res: Response) {
       }
     }
 
+    const rigResolved = await resolveOptionalRigAttachment(body.rig_id, userId, "admin");
+    if (!rigResolved.ok) {
+      return res.status(rigResolved.status).json({ message: rigResolved.message });
+    }
+
     const project = await createProject({
       title: body.title,
       description: body.description,
@@ -137,6 +144,7 @@ export async function postProject(req: AuthenticatedRequest, res: Response) {
       createdBy: new mongoose.Types.ObjectId(userId),
       participants,
       status: body.status,
+      ...(rigResolved.rigObjectId ? { rig_id: rigResolved.rigObjectId } : {}),
     });
 
     // Create timesheets for all assigned crew (all days default to PRESENT)
@@ -184,10 +192,12 @@ export async function patchProject(
       span: string;
       createdBy: string;
       participants: string[];
+      rig_id: string | null;
       status: ProjectStatus;
     }>;
 
-    const updateData: Partial<Project> = {};
+    const updateData: Partial<Omit<Project, "id" | "rig_id">> & { rig_id?: mongoose.Types.ObjectId | null } =
+      {};
     if (body.title !== undefined) updateData.title = body.title;
     if (body.description !== undefined) updateData.description = body.description;
     if (body.span !== undefined) updateData.span = body.span;
@@ -204,6 +214,19 @@ export async function patchProject(
         });
       }
       updateData.participants = body.participants.map((pid) => new mongoose.Types.ObjectId(pid));
+    }
+    if (body.rig_id !== undefined) {
+      if (body.rig_id === null || body.rig_id === "") {
+        updateData.rig_id = null;
+      } else {
+        const rigResolved = await resolveOptionalRigAttachment(body.rig_id, userId, role);
+        if (!rigResolved.ok) {
+          return res.status(rigResolved.status).json({ message: rigResolved.message });
+        }
+        if (rigResolved.rigObjectId) {
+          updateData.rig_id = rigResolved.rigObjectId;
+        }
+      }
     }
 
     const project = await updateProject(id, updateData);

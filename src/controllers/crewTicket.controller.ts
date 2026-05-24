@@ -22,6 +22,7 @@ import { CabinClass, TripType } from "../models/crewTicket.model";
 import { convert, fetchRates, type CurrencyCode, type ExchangeRates } from "../lib/currency";
 import { getAdminSettings } from "../lib/admin-settings";
 import { findFirstSuperAdmin } from "../models/superadmin.model";
+import { projectRigObjectId } from "../models/project.model";
 import { sendFlightTicketEmail, type FlightTicketData } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
 import { fetchRiyaGetcity, normalizeRiyaAirports } from "../lib/riya-airports";
@@ -416,7 +417,6 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
 
     const body = req.body as {
       project_id: string;
-      rig_id?: string;
       crew_ids: string[];
       flight: {
         id: string;
@@ -459,10 +459,7 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       }
     }
 
-    const rigResolved = await resolveOptionalRigAttachment(body.rig_id, actorUserId, role);
-    if (!rigResolved.ok) {
-      return res.status(rigResolved.status).json({ message: rigResolved.message });
-    }
+    const projectRigId = projectRigObjectId(project);
 
     const admin = project.createdBy;
     const adminId =
@@ -579,7 +576,7 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       const ticket = await createCrewTicket({
         crew_id: new mongoose.Types.ObjectId(crewId),
         project_id: new mongoose.Types.ObjectId(body.project_id),
-        ...(rigResolved.rigObjectId ? { rig_id: rigResolved.rigObjectId } : {}),
+        ...(projectRigId ? { rig_id: projectRigId } : {}),
         from,
         to,
         class: cabinClass,
