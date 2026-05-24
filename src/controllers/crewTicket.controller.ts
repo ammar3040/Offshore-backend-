@@ -25,7 +25,7 @@ import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { projectRigObjectId } from "../models/project.model";
 import { sendFlightTicketEmail, type FlightTicketData } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
-import { fetchRiyaGetcity, normalizeRiyaAirports } from "../lib/riya-airports";
+import { fetchRiyaGetcity, normalizeRiyaAirports, type RiyaAirportItem } from "../lib/riya-airports";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import {
   ACCESS_DENIED_MESSAGE,
@@ -1651,6 +1651,85 @@ const NEARBY_AIRPORT_RADIUS_KM = 100;
 const NEARBY_AIRPORT_LIMIT = 5;
 const NEARBY_PARENT_LIMIT = 5;
 
+/** Riya getcity display name, e.g. "Mumbai [BOM] - Chhatrapati Shivaji..., India" */
+function parseRiyaAirportDisplayName(name: string): { city: string; code: string; airportName: string } | null {
+  const match = name.trim().match(/^(.+?)\s*\[([A-Z0-9]{3,4})\]\s*-\s*(.+?)\s*,\s*.+$/i);
+  if (!match) return null;
+  return {
+    city: match[1].trim(),
+    code: match[2].trim().toUpperCase(),
+    airportName: match[3].trim(),
+  };
+}
+
+function riyaItemToSearchResult(item: RiyaAirportItem): AirportSearchResult {
+  const name = (item.Name ?? "").trim();
+  let code = (item.Code ?? "").trim().toUpperCase();
+  const countryCode = (item.COUNTRY ?? item.CountryCode ?? "").trim().toUpperCase();
+  const countryName = item.COUNTRYNAME ?? item.CountryName ?? COUNTRY_NAMES[countryCode] ?? countryCode;
+
+  const parsed = parseRiyaAirportDisplayName(name);
+  if (parsed) {
+    if (!code) code = parsed.code;
+  }
+
+  return {
+    Name: name,
+    Code: code,
+    ...(parsed?.airportName ? { AirportName: parsed.airportName } : {}),
+    CountryCode: countryCode,
+    CountryName: countryName,
+    COUNTRY: countryCode,
+    COUNTRYNAME: countryName,
+  };
+}
+
+/** airportroutes.com blocks many cloud/datacenter IPs (403 on Vercel); probe once per instance. */
+let airportroutesAvailable: boolean | null = null;
+
+async function isAirportroutesAvailable(): Promise<boolean> {
+  if (airportroutesAvailable !== null) return airportroutesAvailable;
+  try {
+    const res = await fetch(
+      "https://www.airportroutes.com/api/search-airports/?q=BOM&limit=1"
+    );
+    airportroutesAvailable = res.ok;
+  } catch {
+    airportroutesAvailable = false;
+  }
+  return airportroutesAvailable;
+}
+
+function dedupeNestedAirportResults(airports: AirportSearchResult[]): AirportSearchResult[] {
+  const nestedCodes = new Set<string>();
+  return airports.filter((airport) => {
+    const code = airport.Code.trim().toUpperCase();
+    if (code && nestedCodes.has(code)) return false;
+    for (const nearbyAirport of airport.nearbyAirports ?? []) {
+      const nearbyCode = nearbyAirport.Code.trim().toUpperCase();
+      if (nearbyCode) nestedCodes.add(nearbyCode);
+    }
+    return true;
+  });
+}
+
+/** When airportroutes is blocked, attach other Riya hits in the same country as nearby options. */
+function enrichNearbyFromRiyaSiblings(airports: AirportSearchResult[]): AirportSearchResult[] {
+  const enriched = airports.map((airport, index) => {
+    if (index >= NEARBY_PARENT_LIMIT) return airport;
+    const code = airport.Code.trim().toUpperCase();
+    const country = airport.CountryCode.trim().toUpperCase();
+    const nearbyAirports = airports
+      .filter((other) => {
+        const otherCode = other.Code.trim().toUpperCase();
+        return otherCode && otherCode !== code && other.CountryCode.trim().toUpperCase() === country;
+      })
+      .slice(0, NEARBY_AIRPORT_LIMIT);
+    return nearbyAirports.length > 0 ? { ...airport, nearbyAirports } : airport;
+  });
+  return dedupeNestedAirportResults(enriched);
+}
+
 /** Prefer commercial-ish rows; still include ICAO-only if scheduled at a paved field */
 function airportroutesCountryRowSelectable(hit: AirportroutesCountryHit): boolean {
   const iata = (hit.iata ?? "").trim().toUpperCase();
@@ -1765,6 +1844,10 @@ async function fetchNearbyAirports(parentHit: AirportroutesCountryHit, parentCod
 }
 
 async function enrichAirportsWithNearby(airports: AirportSearchResult[]): Promise<AirportSearchResult[]> {
+  if (!(await isAirportroutesAvailable())) {
+    return enrichNearbyFromRiyaSiblings(airports);
+  }
+
   const enriched = await Promise.all(
     airports.map(async (airport, index) => {
       if (index >= NEARBY_PARENT_LIMIT) return airport;
@@ -1783,16 +1866,7 @@ async function enrichAirportsWithNearby(airports: AirportSearchResult[]): Promis
     })
   );
 
-  const nestedCodes = new Set<string>();
-  return enriched.filter((airport) => {
-    const code = airport.Code.trim().toUpperCase();
-    if (code && nestedCodes.has(code)) return false;
-    for (const nearbyAirport of airport.nearbyAirports ?? []) {
-      const nearbyCode = nearbyAirport.Code.trim().toUpperCase();
-      if (nearbyCode) nestedCodes.add(nearbyCode);
-    }
-    return true;
-  });
+  return dedupeNestedAirportResults(enriched);
 }
 
 function prioritizeExactAirportMatch(airports: AirportSearchResult[], query: string): AirportSearchResult[] {
@@ -1855,7 +1929,15 @@ async function fetchAirportsFallback(query: string): Promise<AirportSearchResult
     const countryCode = hit.country_code || "";
     const countryName = COUNTRY_NAMES[countryCode] || countryCode;
     const name = `${hit.city} [${code}] - ${hit.name}, ${countryName}`;
-    return { Name: name, Code: code, CountryCode: countryCode, CountryName: countryName, COUNTRY: countryCode, COUNTRYNAME: countryName };
+    return {
+      Name: name,
+      Code: code,
+      AirportName: hit.name,
+      CountryCode: countryCode,
+      CountryName: countryName,
+      COUNTRY: countryCode,
+      COUNTRYNAME: countryName,
+    };
   });
 }
 
@@ -1897,27 +1979,7 @@ export async function searchAirports(req: import("express").Request, res: Respon
       }));
     }
 
-    const airports: AirportSearchResult[] = items.map((item) => {
-      let name = item.Name ?? "";
-      let code = item.Code ?? "";
-      const countryCode = item.COUNTRY ?? item.CountryCode ?? "";
-      const countryName = item.COUNTRYNAME ?? item.CountryName ?? "";
-
-      // Extract code from "City [CODE]" format if not present
-      if (!code && name) {
-        const match = name.match(/\s*\[([A-Z0-9]{3})\]\s*$/);
-        if (match) code = match[1];
-      }
-
-      return {
-        Name: name,
-        Code: code,
-        CountryCode: countryCode,
-        CountryName: countryName,
-        COUNTRY: countryCode,
-        COUNTRYNAME: countryName,
-      };
-    });
+    const airports: AirportSearchResult[] = items.map((item) => riyaItemToSearchResult(item));
 
     return res.json(await enrichAirportsWithNearby(prioritizeExactAirportMatch(airports, query)));
   } catch (error) {
