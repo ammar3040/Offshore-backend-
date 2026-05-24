@@ -59,10 +59,11 @@ export async function postRig(req: AuthenticatedRequest, res: Response) {
       return res.status(401).json({ message: "Authentication required." });
     }
 
-    const body = req.body as { name: string; description?: string };
+    const body = req.body as { name: string; address: string; description?: string };
 
     const rig = await createRig({
       name: body.name,
+      address: body.address,
       description: body.description,
       createdBy: new mongoose.Types.ObjectId(userId),
     });

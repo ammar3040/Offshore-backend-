@@ -47,6 +47,7 @@ function toAdminPublic(doc: {
 export interface Rig {
   id: string;
   name: string;
+  address: string;
   description?: string;
   createdBy: mongoose.Types.ObjectId | AdminPublic;
 }
@@ -58,6 +59,7 @@ export interface RigDocument extends Omit<Rig, "id">, Document {
 const rigSchema = new Schema<RigDocument>(
   {
     name: { type: String, required: true },
+    address: { type: String, required: true },
     description: { type: String, required: false },
     createdBy: { type: Schema.Types.ObjectId, ref: "Admin", required: true },
   },
@@ -71,6 +73,7 @@ function toRig(doc: RigDocument): Rig {
   return {
     id: doc._id.toString(),
     name: doc.name,
+    address: doc.address,
     description: doc.description,
     createdBy: isPopulatedAdmin(doc.createdBy)
       ? toAdminPublic(doc.createdBy)

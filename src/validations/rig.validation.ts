@@ -9,6 +9,10 @@ export const createRigSchema = Joi.object({
     "string.empty": "name is required",
     "any.required": "name is required",
   }),
+  address: Joi.string().required().trim().messages({
+    "string.empty": "address is required",
+    "any.required": "address is required",
+  }),
   description: Joi.string().trim().optional(),
 });
 
