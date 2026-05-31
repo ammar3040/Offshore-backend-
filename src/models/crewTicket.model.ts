@@ -14,6 +14,11 @@ export enum TripType {
   RoundTrip = "ROUND_TRIP",
 }
 
+export enum CrewTicketStatus {
+  Unapproved = "UNAPPROVED",
+  Approved = "APPROVED",
+}
+
 export interface StoredFlightItinerarySegment {
   airlineName?: string;
   airlineCode?: string;
@@ -71,6 +76,13 @@ export interface CrewTicket {
   trip: TripType;
   /** Optional URL to uploaded ticket PDF */
   pdf?: string;
+  /** Approval status for the ticket lifecycle */
+  status: CrewTicketStatus;
+  /** Booking reference added by superadmin during approval */
+  bookingReference?: string;
+  /** Approval audit metadata */
+  approvedAt?: Date;
+  approvedBy?: mongoose.Types.ObjectId;
   /** Markup applied to this booking */
   markup: number;
   /** Running balance — cumulative markup across bookings for the project */
@@ -173,6 +185,15 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
       required: true,
     },
     pdf: { type: String, required: false },
+    status: {
+      type: String,
+      enum: Object.values(CrewTicketStatus),
+      required: true,
+      default: CrewTicketStatus.Unapproved,
+    },
+    bookingReference: { type: String, required: false, trim: true },
+    approvedAt: { type: Date, required: false },
+    approvedBy: { type: Schema.Types.ObjectId, ref: "SuperAdmin", required: false },
     markup: { type: Number, required: true, default: 0 },
     balance: { type: Number, required: true, default: 0 },
     price: { type: Number, required: true, default: 0 },
@@ -204,6 +225,10 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     infants: doc.infants,
     trip: doc.trip as TripType,
     pdf: doc.pdf,
+    status: (doc.status as CrewTicketStatus) ?? CrewTicketStatus.Unapproved,
+    bookingReference: doc.bookingReference,
+    approvedAt: doc.approvedAt,
+    approvedBy: doc.approvedBy,
     markup: doc.markup ?? 0,
     balance: doc.balance ?? 0,
     price: doc.price ?? 0,
@@ -309,7 +334,10 @@ export async function ensureCrewTicketIndexes(): Promise<void> {
   await CrewTicketModel.syncIndexes();
 }
 
-export async function createCrewTicket(data: Omit<CrewTicket, "id">): Promise<CrewTicket> {
+export async function createCrewTicket(
+  data: Omit<CrewTicket, "id" | "status" | "bookingReference" | "approvedAt" | "approvedBy"> &
+    Partial<Pick<CrewTicket, "status" | "bookingReference" | "approvedAt" | "approvedBy">>
+): Promise<CrewTicket> {
   const doc = await CrewTicketModel.create(data);
   const populated = await CrewTicketModel.findById(doc._id)
     .populate("crew_id")

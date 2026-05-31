@@ -59,6 +59,13 @@ export const updateCrewTicketSchema = Joi.object({
   "object.min": "At least one field is required for update",
 });
 
+export const approveCrewTicketSchema = Joi.object({
+  bookingReference: Joi.string().trim().min(1).max(64).required().messages({
+    "any.required": "bookingReference is required",
+    "string.empty": "bookingReference is required",
+  }),
+});
+
 export const crewTicketIdParamSchema = Joi.object({
   id: objectId.required().messages({
     "any.required": "Crew ticket id is required",

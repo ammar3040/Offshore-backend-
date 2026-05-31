@@ -18,13 +18,14 @@ import {
   updateAdminBalance,
   updateAdminCancellationState,
 } from "../models";
-import { CabinClass, TripType } from "../models/crewTicket.model";
+import { CabinClass, CrewTicketStatus, TripType } from "../models/crewTicket.model";
 import { convert, fetchRates, type CurrencyCode, type ExchangeRates } from "../lib/currency";
 import { getAdminSettings } from "../lib/admin-settings";
 import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { projectRigObjectId } from "../models/project.model";
-import { sendFlightTicketEmail } from "../services/email";
+import { sendFlightTicketEmail, sendTicketApprovalRequestEmail } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
+import { generateTicketPdfBuffer } from "../services/ticketPdf";
 import {
   buildFlightSnapshotFromBookPayload,
   buildFlightTicketDataFromCrewTicket,
@@ -48,6 +49,44 @@ import {
   cancellationInstallmentInCurrency,
   revertCancellationAccrual,
 } from "../services/cancellation-debt";
+
+function refId(value: unknown): string {
+  if (typeof value === "object" && value && "_id" in value) {
+    return (value as { _id: { toString: () => string } })._id.toString();
+  }
+  return String(value);
+}
+
+function crewDisplayName(value: unknown): string {
+  if (typeof value === "object" && value) {
+    const crew = value as { firstname?: string; lastname?: string; email?: string };
+    const name = [crew.firstname, crew.lastname].filter(Boolean).join(" ").trim();
+    return name || crew.email || "Crew member";
+  }
+  return "Crew member";
+}
+
+function projectDisplayTitle(value: unknown): string {
+  if (typeof value === "object" && value && "title" in value) {
+    return (value as { title?: string }).title || "Project";
+  }
+  return "Project";
+}
+
+function vesselDisplayName(ticket: CrewTicket): string {
+  const rig = ticket.rig_id;
+  if (typeof rig === "object" && rig && "name" in rig) {
+    return (rig as { name?: string }).name || "—";
+  }
+  const project = ticket.project_id;
+  if (typeof project === "object" && project && "rig_id" in project) {
+    const projectRig = (project as { rig_id?: unknown }).rig_id;
+    if (typeof projectRig === "object" && projectRig && "name" in projectRig) {
+      return (projectRig as { name?: string }).name || "—";
+    }
+  }
+  return projectDisplayTitle(project);
+}
 
 export async function getCrewTickets(req: AuthenticatedRequest, res: Response) {
   try {
@@ -220,6 +259,7 @@ export async function postCrewTicket(req: AuthenticatedRequest, res: Response) {
       children: body.children ?? 0,
       infants: body.infants ?? 0,
       trip: body.trip as import("../models/crewTicket.model").TripType,
+      status: CrewTicketStatus.Unapproved,
       markup: 0,
       balance: 0,
       price: body.price ?? 0,
@@ -594,6 +634,7 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
         children,
         infants,
         trip,
+        status: CrewTicketStatus.Unapproved,
         markup: markupGBP,
         balance: runningBalance,
         price: priceGBP,
@@ -620,13 +661,140 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       await updateAdminCancellationState(adminId, newOutstanding, newSlots);
     }
 
+    await Promise.all(
+      created.map(async (ticket) => {
+        const { flight: flightData, currency } = buildFlightTicketDataFromCrewTicket(ticket);
+        await sendTicketApprovalRequestEmail({
+          ticketId: ticket.id,
+          crewName: crewDisplayName(ticket.crew_id),
+          projectTitle: projectDisplayTitle(ticket.project_id) || project.title,
+          vesselName: vesselDisplayName(ticket),
+          flight: flightData,
+          currency,
+          price: ticket.price,
+        });
+      })
+    );
+
     return res.status(201).json({
-      message: `Crew ticket(s) created successfully for ${created.length} crew.`,
+      message: `Crew ticket(s) created successfully for ${created.length} crew and sent for approval.`,
       crewTickets: created,
       flightId,
     });
   } catch (error) {
     console.error("Error booking flight:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function approveCrewTicket(
+  req: AuthenticatedRequest & Request<{ id: string }>,
+  res: Response
+) {
+  try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+    if (!isSuperAdmin(role)) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
+    const { id } = req.params;
+    const { bookingReference } = req.body as { bookingReference: string };
+    const trimmedReference = bookingReference.trim();
+    const ticket = await findCrewTicketById(id);
+    if (!ticket) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+    if (ticket.status === CrewTicketStatus.Approved) {
+      return res.status(409).json({ message: "Crew ticket is already approved." });
+    }
+
+    const crewId = refId(ticket.crew_id);
+    const crew = await findCrewByCrewId(crewId);
+    if (!crew) {
+      return res.status(404).json({ message: "Crew not found." });
+    }
+
+    const approvedTicket = await updateCrewTicket(id, {
+      status: CrewTicketStatus.Approved,
+      bookingReference: trimmedReference,
+      approvedAt: new Date(),
+      approvedBy: new mongoose.Types.ObjectId(actorUserId),
+    });
+
+    if (!approvedTicket) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+
+    return res.status(200).json({
+      message: "Crew ticket approved successfully.",
+      crewTicket: approvedTicket,
+      pdfDownloadUrl: `/crew-ticket/${approvedTicket.id}/pdf`,
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error approving crew ticket:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function downloadCrewTicketPdf(
+  req: AuthenticatedRequest & Request<{ id: string }>,
+  res: Response
+) {
+  try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const { id } = req.params;
+    const allowed = await ticketAccessibleByCaller(id, actorUserId, role);
+    if (!allowed) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
+    const ticket = await findCrewTicketById(id);
+    if (!ticket) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+    if (ticket.status !== CrewTicketStatus.Approved) {
+      return res.status(403).json({ message: "Ticket PDF is available only after approval." });
+    }
+    if (!ticket.bookingReference) {
+      return res.status(400).json({ message: "Ticket is missing a booking reference." });
+    }
+
+    const crewId = refId(ticket.crew_id);
+    const crew = await findCrewByCrewId(crewId);
+    if (!crew) {
+      return res.status(404).json({ message: "Crew not found." });
+    }
+
+    const { flight: flightData, currency } = buildFlightTicketDataFromCrewTicket(ticket);
+    const pdfBuffer = await generateTicketPdfBuffer({
+      crewFirstname: crew.firstname,
+      flight: flightData,
+      currency,
+      renderOptions: {
+        bookingReference: ticket.bookingReference,
+        passengerName: crewDisplayName(crew),
+        vesselName: vesselDisplayName(ticket),
+      },
+    });
+
+    const filename = `crew-ticket-${ticket.bookingReference}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+    return res.send(pdfBuffer);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error downloading crew ticket PDF:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
@@ -670,7 +838,12 @@ export async function sendTicketToCrewEmail(
       crew.firstname,
       flightData,
       currency,
-      ticket.pdf
+      ticket.pdf,
+      {
+        bookingReference: ticket.bookingReference,
+        passengerName: crewDisplayName(crew),
+        vesselName: vesselDisplayName(ticket),
+      }
     );
 
     return res.status(200).json({

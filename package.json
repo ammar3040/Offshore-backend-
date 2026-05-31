@@ -7,6 +7,7 @@
     "dev": "nodemon --watch src --ext ts,js --exec ts-node src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "install:chrome": "puppeteer browsers install chrome",
     "seed:superadmin": "ts-node scripts/seed-superadmin.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -25,7 +26,8 @@
     "mongoose": "^9.2.0",
     "multer": "^2.0.2",
     "node-cron": "^4.2.1",
-    "nodemailer": "^8.0.1"
+    "nodemailer": "^8.0.1",
+    "puppeteer": "^25.1.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",

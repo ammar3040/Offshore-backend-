@@ -1,7 +1,9 @@
 import { Router } from "express";
 import {
+  approveCrewTicket,
   bookFlight,
   deleteCrewTicketHandler,
+  downloadCrewTicketPdf,
   getCrewTicketById,
   getCrewTickets,
   getCrewTicketsByCrewId,
@@ -13,11 +15,12 @@ import {
   sendTicketToCrewEmail,
   uploadTicketPdf,
 } from "../controllers";
-import { authenticateAdmin, authenticateAdminOrCrew, authenticateAdminOrSuperAdmin } from "../middleware/auth";
+import { authenticateAdmin, authenticateAdminOrCrew, authenticateAdminOrSuperAdmin, authenticateSuperAdmin } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { crewTicketPdfUpload } from "../middleware/upload";
 import { uploadCrewTicketPdfToCloudinary } from "../middleware/cloudinaryUpload";
 import {
+  approveCrewTicketSchema,
   bookFlightSchema,
   createCrewTicketSchema,
   crewIdParamSchema,
@@ -31,10 +34,18 @@ const router = Router();
 router.get("/", authenticateAdminOrSuperAdmin, getCrewTickets);
 router.get("/airports/search", searchAirports);
 router.get("/crew/:id", authenticateAdminOrCrew, validate(crewIdParamSchema, "params"), getCrewTicketsByCrewId);
+router.get("/:id/pdf", authenticateAdminOrCrew, validate(crewTicketIdParamSchema, "params"), downloadCrewTicketPdf);
 router.get("/:id", authenticateAdminOrCrew, validate(crewTicketIdParamSchema, "params"), getCrewTicketById);
 router.post("/", authenticateAdmin, validate(createCrewTicketSchema), postCrewTicket);
 router.post("/search-flights", authenticateAdmin, validate(searchFlightsSchema), searchFlightsController);
 router.post("/book", authenticateAdmin, validate(bookFlightSchema), bookFlight);
+router.patch(
+  "/:id/approve",
+  authenticateSuperAdmin,
+  validate(crewTicketIdParamSchema, "params"),
+  validate(approveCrewTicketSchema),
+  approveCrewTicket
+);
 router.post(
   "/:id/send-ticket-email",
   authenticateAdminOrSuperAdmin,
