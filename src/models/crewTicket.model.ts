@@ -14,6 +14,48 @@ export enum TripType {
   RoundTrip = "ROUND_TRIP",
 }
 
+export interface StoredFlightItinerarySegment {
+  airlineName?: string;
+  airlineCode?: string;
+  flightNumber?: string;
+  from?: string;
+  to?: string;
+  fromAirport?: string;
+  toAirport?: string;
+  departureTime?: string;
+  arrivalTime?: string;
+  cabin?: string;
+  baggage?: string;
+  cabinBaggage?: string;
+}
+
+export interface StoredFlightLeg {
+  from?: string;
+  to?: string;
+  departureTime?: string;
+  arrivalTime?: string;
+  duration?: string;
+  airlineName?: string;
+  airlineCode?: string;
+  itinerary?: StoredFlightItinerarySegment[];
+}
+
+export interface StoredFlightFare {
+  totalFare?: number;
+  cabin?: string;
+  name?: string;
+}
+
+/** Full flight details from search/book — used for crew ticket emails. */
+export interface CrewTicketFlightSnapshot {
+  airlineName?: string;
+  airlineCode?: string;
+  legs: StoredFlightLeg[];
+  fares?: StoredFlightFare[];
+  /** Display currency for fare in emails (e.g. INR from search). */
+  currency?: string;
+}
+
 export interface CrewTicket {
   id: string;
   crew_id: mongoose.Types.ObjectId;
@@ -41,6 +83,8 @@ export interface CrewTicket {
   travelStart?: Date;
   /** Last leg arrival — used with travelStart for duplicate detection */
   travelEnd?: Date;
+  /** Search/book flight payload for ticket emails */
+  flightSnapshot?: CrewTicketFlightSnapshot;
 }
 
 export interface CrewTicketDocument extends Omit<CrewTicket, "id">, Document {
@@ -52,6 +96,58 @@ const airportLocationSchema = new Schema<AirportLocation>(
     Name: { type: String, required: true },
     COUNTRY: { type: String, required: true },
     COUNTRYNAME: { type: String, required: true },
+  },
+  { _id: false }
+);
+
+const flightItinerarySegmentSchema = new Schema<StoredFlightItinerarySegment>(
+  {
+    airlineName: { type: String, required: false },
+    airlineCode: { type: String, required: false },
+    flightNumber: { type: String, required: false },
+    from: { type: String, required: false },
+    to: { type: String, required: false },
+    fromAirport: { type: String, required: false },
+    toAirport: { type: String, required: false },
+    departureTime: { type: String, required: false },
+    arrivalTime: { type: String, required: false },
+    cabin: { type: String, required: false },
+    baggage: { type: String, required: false },
+    cabinBaggage: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+const flightLegSchema = new Schema<StoredFlightLeg>(
+  {
+    from: { type: String, required: false },
+    to: { type: String, required: false },
+    departureTime: { type: String, required: false },
+    arrivalTime: { type: String, required: false },
+    duration: { type: String, required: false },
+    airlineName: { type: String, required: false },
+    airlineCode: { type: String, required: false },
+    itinerary: { type: [flightItinerarySegmentSchema], default: [] },
+  },
+  { _id: false }
+);
+
+const flightFareSchema = new Schema<StoredFlightFare>(
+  {
+    totalFare: { type: Number, required: false },
+    cabin: { type: String, required: false },
+    name: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+const flightSnapshotSchema = new Schema<CrewTicketFlightSnapshot>(
+  {
+    airlineName: { type: String, required: false },
+    airlineCode: { type: String, required: false },
+    legs: { type: [flightLegSchema], default: [] },
+    fares: { type: [flightFareSchema], default: [] },
+    currency: { type: String, required: false },
   },
   { _id: false }
 );
@@ -83,6 +179,7 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
     cashback: { type: Number, required: true, default: 0 },
     travelStart: { type: Date, required: false },
     travelEnd: { type: Date, required: false },
+    flightSnapshot: { type: flightSnapshotSchema, required: false },
   },
   { timestamps: true }
 );
@@ -113,6 +210,7 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     cashback: doc.cashback ?? 0,
     travelStart: doc.travelStart,
     travelEnd: doc.travelEnd,
+    flightSnapshot: doc.flightSnapshot,
   };
 }
 

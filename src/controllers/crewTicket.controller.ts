@@ -23,8 +23,12 @@ import { convert, fetchRates, type CurrencyCode, type ExchangeRates } from "../l
 import { getAdminSettings } from "../lib/admin-settings";
 import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { projectRigObjectId } from "../models/project.model";
-import { sendFlightTicketEmail, type FlightTicketData } from "../services/email";
+import { sendFlightTicketEmail } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
+import {
+  buildFlightSnapshotFromBookPayload,
+  buildFlightTicketDataFromCrewTicket,
+} from "../lib/flight-snapshot";
 import { fetchRiyaGetcity, normalizeRiyaAirports, type RiyaAirportItem } from "../lib/riya-airports";
 import { distanceKmBetween, getAirportCoordinatesByIata } from "../lib/airport-coordinates";
 import type { AuthenticatedRequest } from "../middleware/auth";
@@ -570,6 +574,11 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
 
     const created: import("../models/crewTicket.model").CrewTicket[] = [];
     let runningBalance = await sumMarkupByProject(body.project_id);
+    const flightSnapshot = buildFlightSnapshotFromBookPayload(
+      fl,
+      requestCurrency,
+      payloadPriceRaw
+    );
 
     for (const crewId of body.crew_ids) {
       runningBalance += markupGBP;
@@ -592,6 +601,7 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
         ...(travelBounds
           ? { travelStart: travelBounds.travelStart, travelEnd: travelBounds.travelEnd }
           : {}),
+        flightSnapshot,
       });
       created.push(ticket);
     }
@@ -619,39 +629,6 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
     console.error("Error booking flight:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
-}
-
-/**
- * Build minimal FlightTicketData from CrewTicket for sending ticket email.
- * Used when sending ticket to crew via centralized endpoint (ticket may have been
- * created via postCrewTicket or PDF uploaded later).
- */
-function buildFlightDataFromCrewTicket(ticket: CrewTicket): FlightTicketData {
-  const fromName = ticket.from?.Name ?? "—";
-  const toName = ticket.to?.Name ?? "—";
-  return {
-    id: ticket.id,
-    airlineName: "Marine Flight",
-    legs: [
-      {
-        from: fromName,
-        to: toName,
-        duration: ticket.trip === "ROUND_TRIP" ? "Round trip" : "One way",
-        itinerary: [
-          {
-            from: fromName,
-            to: toName,
-            fromAirport: fromName,
-            toAirport: toName,
-            cabin: ticket.class,
-            baggage: "—",
-            cabinBaggage: "—",
-          },
-        ],
-      },
-    ],
-    fares: [{ cabin: ticket.class, totalFare: 0 }],
-  };
 }
 
 export async function sendTicketToCrewEmail(
@@ -687,12 +664,12 @@ export async function sendTicketToCrewEmail(
       return res.status(404).json({ message: "Crew not found." });
     }
 
-    const flightData = buildFlightDataFromCrewTicket(ticket);
+    const { flight: flightData, currency } = buildFlightTicketDataFromCrewTicket(ticket);
     await sendFlightTicketEmail(
       crew.email,
       crew.firstname,
       flightData,
-      "INR",
+      currency,
       ticket.pdf
     );
 
