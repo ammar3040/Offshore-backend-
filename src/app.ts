@@ -1,5 +1,5 @@
 import "dotenv/config";
-import cors from "cors";
+import cors, { CorsOptions } from "cors";
 import express, { Request, Response } from "express";
 import routes from "./routes";
 import { connectDB } from "./dbconnection";
@@ -13,24 +13,26 @@ const allowedOrigins = [
   "https://www.subseacore.com",
   ...(process.env.CORS_ORIGINS ?? "")
     .split(",")
-    .map((o) => o.trim())
+    .map((origin) => origin.trim().replace(/\/$/, ""))
     .filter(Boolean),
 ];
 
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(null, false);
-      }
-    },
-    credentials: true,
-    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+const corsOptions: CorsOptions = {
+  origin(origin, callback) {
+    const normalizedOrigin = origin?.replace(/\/$/, "");
+    if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
+      callback(null, true);
+      return;
+    }
+    callback(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
 
 app.use(express.json());
 
