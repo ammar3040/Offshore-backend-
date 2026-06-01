@@ -1,5 +1,3 @@
-import puppeteer from "puppeteer";
-
 import cloudinary, { CLOUDINARY_CREW_TICKET_FOLDER } from "../config/cloudinary";
 import { renderFlightTicketHtml, type FlightTicketData, type FlightTicketRenderOptions } from "./email";
 
@@ -22,6 +20,13 @@ function ensureCloudinaryConfigured(): void {
   }
 }
 
+async function loadPuppeteer() {
+  const importer = new Function("specifier", "return import(specifier)") as (
+    specifier: string
+  ) => Promise<typeof import("puppeteer")>;
+  return importer("puppeteer");
+}
+
 export async function generateTicketPdfBuffer(input: TicketPdfInput): Promise<Buffer> {
   const html = renderFlightTicketHtml(
     input.crewFirstname,
@@ -29,6 +34,7 @@ export async function generateTicketPdfBuffer(input: TicketPdfInput): Promise<Bu
     input.currency,
     input.renderOptions
   );
+  const puppeteer = await loadPuppeteer();
   const browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
