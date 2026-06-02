@@ -1565,9 +1565,23 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
     const toData = parseAirport(to);
     const sector = from?.COUNTRY === to?.COUNTRY ? "D" : "I";
 
-    const formattedDepDate = departureDate ? `${departureDate}T00:00:00` : "0001-01-01T00:00:00";
+    const emptyRiyaDate = "0001-01-01T00:00:00";
+    const formatRiyaDate = (date?: string) => (date ? `${date}T00:00:00` : emptyRiyaDate);
+    const shiftDate = (date: string, days: number) => {
+      const parsedDate = new Date(`${date}T00:00:00Z`);
+      if (Number.isNaN(parsedDate.getTime())) return date;
+      parsedDate.setUTCDate(parsedDate.getUTCDate() + days);
+      return parsedDate.toISOString().slice(0, 10);
+    };
+    const departureSearchDates = departureDate
+      ? [departureDate]
+      : filterArrivalDate
+        ? [filterArrivalDate, shiftDate(filterArrivalDate, -1), shiftDate(filterArrivalDate, -2)]
+        : [];
+
+    const formattedDepDate = formatRiyaDate(departureSearchDates[0]);
     const formattedReturnDate =
-      tripType === "round-trip" && returnDate ? `${returnDate}T00:00:00` : "0001-01-01T00:00:00";
+      tripType === "round-trip" && returnDate ? formatRiyaDate(returnDate) : emptyRiyaDate;
 
     const hasTimeFilters = filterDepartureTime || filterArrivalDate || filterArrivalTime;
 
@@ -1693,19 +1707,24 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
         pagination: { page, limit, total, totalPages },
       });
     } else {
-      const data = await fetchRiya(
-        buildPayload(
-          fromData.code,
-          toData.code,
-          fromData.cityWithCode,
-          toData.cityWithCode,
-          formattedDepDate,
-          from?.COUNTRY || "IN",
-          to?.COUNTRY || "IN",
-          opts
+      const searchDates = departureSearchDates.length > 0 ? departureSearchDates : [undefined];
+      const dataSets = await Promise.all(
+        searchDates.map((searchDate) =>
+          fetchRiya(
+            buildPayload(
+              fromData.code,
+              toData.code,
+              fromData.cityWithCode,
+              toData.cityWithCode,
+              formatRiyaDate(searchDate),
+              from?.COUNTRY || "IN",
+              to?.COUNTRY || "IN",
+              opts
+            )
+          )
         )
       );
-      const transformedData = transformRiyaResponse(data || {}, fromData.code, toData.code);
+      const transformedData = dataSets.flatMap((data) => transformRiyaResponse(data || {}, fromData.code, toData.code));
       const flights = sortFlights(
         applyAdminLogic(transformedData)
           .filter(matchesTimeFilters)
