@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import cloudinary, {
+  CLOUDINARY_ADMIN_INVOICE_FOLDER,
   CLOUDINARY_CREW_FOLDER,
   CLOUDINARY_CREW_TICKET_FOLDER,
 } from "../config/cloudinary";
@@ -194,6 +195,46 @@ export async function uploadCrewTicketPdfToCloudinary(
     console.error("Cloudinary crew ticket PDF upload error:", error);
     return res.status(500).json({
       message: "Failed to upload ticket PDF to cloud storage.",
+    });
+  }
+}
+
+/** Upload admin invoice PDF to Cloudinary. Expects req.file from multer.single("pdf"). */
+export async function uploadAdminInvoicePdfToCloudinary(
+  req: Request & { file?: Express.Multer.File } & { uploadedPdfUrl?: string },
+  res: Response,
+  next: NextFunction
+) {
+  const file = req.file;
+  if (!file) {
+    return res.status(400).json({ message: "PDF file is required. Send as form field 'pdf'." });
+  }
+
+  if (
+    !process.env.CLOUDINARY_CLOUD_NAME ||
+    !process.env.CLOUDINARY_API_KEY ||
+    !process.env.CLOUDINARY_API_SECRET
+  ) {
+    return res.status(500).json({
+      message:
+        "Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.",
+    });
+  }
+
+  try {
+    const b64 = file.buffer.toString("base64");
+    const dataUri = `data:${file.mimetype};base64,${b64}`;
+    const result = await cloudinary.uploader.upload(dataUri, {
+      folder: CLOUDINARY_ADMIN_INVOICE_FOLDER,
+      resource_type: "auto",
+    });
+    req.uploadedPdfUrl = result.secure_url;
+    next();
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Cloudinary admin invoice PDF upload error:", error);
+    return res.status(500).json({
+      message: "Failed to upload invoice PDF to cloud storage.",
     });
   }
 }

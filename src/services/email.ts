@@ -3,6 +3,7 @@ import path from "path";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const mjml2html = require("mjml") as (mjml: string) => { html: string };
 import nodemailer from "nodemailer";
+import { fetchCloudinaryAssetBuffer } from "../lib/cloudinary-asset";
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -397,6 +398,65 @@ export async function sendFlightTicketEmail(
     to,
     subject: `Your Flight Ticket - ${flight.airlineName ?? "Marine Flight"} (Ref: ${reference})`,
     html,
+  });
+}
+
+/**
+ * Sends the admin invoice email with the generated PDF attached.
+ * The PDF is downloaded from Cloudinary with signed/authenticated access, then attached as a buffer.
+ */
+export async function sendAdminInvoiceEmail(args: {
+  to: string;
+  adminName?: string;
+  projectTitle?: string;
+  invoiceNumber?: string | null;
+  total?: number | null;
+  margin?: number | null;
+  pdfUrl: string;
+}): Promise<void> {
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER || "noreply@marine-flight.com";
+  const greetingName = args.adminName ? escapeHtml(args.adminName) : "there";
+  const invoiceNumber = args.invoiceNumber ? escapeHtml(args.invoiceNumber) : "—";
+  const projectTitle = args.projectTitle ? escapeHtml(args.projectTitle) : "your project";
+  const totalLine =
+    typeof args.total === "number"
+      ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Total (GBP)</td><td style="padding:8px;border:1px solid #e5e7eb;">£${args.total.toFixed(2)}</td></tr>`
+      : "";
+  const marginLine =
+    typeof args.margin === "number"
+      ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Margin (GBP)</td><td style="padding:8px;border:1px solid #e5e7eb;">£${args.margin.toFixed(2)}</td></tr>`
+      : "";
+
+  const filename = args.invoiceNumber ? `${args.invoiceNumber}.pdf` : "invoice.pdf";
+  const pdfBuffer = await fetchCloudinaryAssetBuffer(args.pdfUrl);
+
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.5;">
+      <h2 style="margin:0 0 12px;">Invoice for ${projectTitle}</h2>
+      <p>Hi ${greetingName},</p>
+      <p>Please find attached the invoice for <strong>${projectTitle}</strong>.</p>
+      <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:16px 0;width:100%;max-width:520px;">
+        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Invoice Number</td><td style="padding:8px;border:1px solid #e5e7eb;">${invoiceNumber}</td></tr>
+        ${marginLine}
+        ${totalLine}
+      </table>
+      <p>The full invoice is attached as a PDF.</p>
+    </div>`;
+
+  await transporter.sendMail({
+    from,
+    to: args.to,
+    subject: args.invoiceNumber
+      ? `Invoice ${args.invoiceNumber} - ${args.projectTitle ?? "Marine Flight"}`
+      : `Invoice - ${args.projectTitle ?? "Marine Flight"}`,
+    html,
+    attachments: [
+      {
+        filename,
+        content: pdfBuffer,
+        contentType: "application/pdf",
+      },
+    ],
   });
 }
 

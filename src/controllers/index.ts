@@ -1,5 +1,6 @@
 // Export your controllers from here
 export * from "./admin.controller";
+export * from "./adminInvoice.controller";
 export * from "./auth.controller";
 export * from "./superadmin.controller";
 export * from "./crew.controller";

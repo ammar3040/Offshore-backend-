@@ -392,3 +392,18 @@ export async function sumMarkupByProject(projectId: string): Promise<number> {
   ]);
   return result[0]?.total ?? 0;
 }
+
+/** Sum of `price` (GBP) across this project's APPROVED crew tickets — the invoice ticket subtotal. */
+export async function sumApprovedTicketPriceByProject(projectId: string): Promise<number> {
+  if (!mongoose.Types.ObjectId.isValid(projectId)) return 0;
+  const result = await CrewTicketModel.aggregate([
+    {
+      $match: {
+        project_id: new mongoose.Types.ObjectId(projectId),
+        status: CrewTicketStatus.Approved,
+      },
+    },
+    { $group: { _id: null, total: { $sum: "$price" } } },
+  ]);
+  return result[0]?.total ?? 0;
+}

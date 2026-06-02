@@ -16,3 +16,9 @@ export const crewTicketPdfUpload = multer({
   storage: crewStorage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
 }).single("pdf");
+
+/** Single PDF file for admin invoice upload - field name "pdf" */
+export const adminInvoicePdfUpload = multer({
+  storage: crewStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+}).single("pdf");

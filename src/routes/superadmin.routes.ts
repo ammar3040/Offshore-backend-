@@ -3,10 +3,15 @@ import {
   createAdminBySuperAdmin,
   getAllAdmins,
   getAnalytics,
+  listAdminInvoices,
   loginSuperAdmin,
+  sendAdminInvoice,
+  uploadAdminInvoicePdf,
   upsertMarkup,
 } from "../controllers";
 import { authenticateSuperAdmin } from "../middleware/auth";
+import { adminInvoicePdfUpload } from "../middleware/upload";
+import { uploadAdminInvoicePdfToCloudinary } from "../middleware/cloudinaryUpload";
 
 const router = Router();
 
@@ -15,5 +20,15 @@ router.get("/analytics", authenticateSuperAdmin, getAnalytics);
 router.get("/admins", authenticateSuperAdmin, getAllAdmins);
 router.post("/admins", authenticateSuperAdmin, createAdminBySuperAdmin);
 router.put("/markup", authenticateSuperAdmin, upsertMarkup);
+
+router.get("/admin-invoices", authenticateSuperAdmin, listAdminInvoices);
+router.post(
+  "/admin-invoice/:projectId/upload",
+  authenticateSuperAdmin,
+  adminInvoicePdfUpload,
+  uploadAdminInvoicePdfToCloudinary,
+  uploadAdminInvoicePdf
+);
+router.post("/admin-invoice/:projectId/send", authenticateSuperAdmin, sendAdminInvoice);
 
 export default router;
