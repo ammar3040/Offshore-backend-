@@ -39,6 +39,19 @@ function signedDeliveryUrl(parsed: ParsedCloudinaryUrl): string {
   });
 }
 
+/** Browser-safe delivery URL for a stored Cloudinary asset (requires API secret to sign). */
+export function getSignedCloudinaryDeliveryUrl(secureUrl: string): string | null {
+  const parsed = parseCloudinaryUrl(secureUrl);
+  if (!parsed) return null;
+
+  const configuredCloud = process.env.CLOUDINARY_CLOUD_NAME?.trim();
+  if (configuredCloud && parsed.cloudName !== configuredCloud) {
+    return null;
+  }
+
+  return signedDeliveryUrl(parsed);
+}
+
 function privateDownloadUrl(parsed: ParsedCloudinaryUrl): string {
   const format = parsed.format ?? "pdf";
   return cloudinary.utils.private_download_url(parsed.publicId, format, {

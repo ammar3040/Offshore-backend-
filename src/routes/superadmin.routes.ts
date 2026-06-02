@@ -6,6 +6,7 @@ import {
   listAdminInvoices,
   loginSuperAdmin,
   sendAdminInvoice,
+  streamSuperadminInvoicePdf,
   uploadAdminInvoicePdf,
   upsertMarkup,
 } from "../controllers";
@@ -22,6 +23,7 @@ router.post("/admins", authenticateSuperAdmin, createAdminBySuperAdmin);
 router.put("/markup", authenticateSuperAdmin, upsertMarkup);
 
 router.get("/admin-invoices", authenticateSuperAdmin, listAdminInvoices);
+router.get("/admin-invoice/:projectId/pdf", authenticateSuperAdmin, streamSuperadminInvoicePdf);
 router.post(
   "/admin-invoice/:projectId/upload",
   authenticateSuperAdmin,

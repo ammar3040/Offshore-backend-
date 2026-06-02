@@ -13,7 +13,10 @@ import {
   upsertAdminInvoiceByProjectId,
 } from "../models";
 import type { AuthenticatedRequest } from "../middleware/auth";
+import { fetchCloudinaryAssetBuffer, getSignedCloudinaryDeliveryUrl } from "../lib/cloudinary-asset";
+import { ACCESS_DENIED_MESSAGE, projectOwnedByCaller } from "../lib/resource-access";
 import { sendAdminInvoiceEmail } from "../services/email";
+import type { AdminInvoice } from "../models/adminInvoice.model";
 
 /** Parse an optional margin coming from a form field (string) or JSON body (number). */
 function parseMargin(raw: unknown): { ok: true; value: number | undefined } | { ok: false } {
@@ -61,11 +64,22 @@ function projectTitle(project: { title?: string }): string {
   return project.title || "Project";
 }
 
+/** Replace stored Cloudinary URL with a signed delivery URL safe to open in the browser. */
+function withSignedPdfUrl<T extends AdminInvoice>(invoice: T): T {
+  if (!invoice.pdf) return invoice;
+  const signed = getSignedCloudinaryDeliveryUrl(invoice.pdf);
+  return signed ? { ...invoice, pdf: signed } : invoice;
+}
+
+function invoicePdfFilename(invoice: AdminInvoice, projectId: string): string {
+  return invoice.invoiceNumber ? `${invoice.invoiceNumber}.pdf` : `invoice-${projectId}.pdf`;
+}
+
 /** GET /superadmin/admin-invoices — list all stored invoices. */
 export async function listAdminInvoices(_req: AuthenticatedRequest, res: Response) {
   try {
     const adminInvoices = await findAllAdminInvoices();
-    return res.json({ adminInvoices });
+    return res.json({ adminInvoices: adminInvoices.map(withSignedPdfUrl) });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error listing admin invoices:", error);
@@ -84,10 +98,12 @@ export async function listAdminPanelInvoices(req: AuthenticatedRequest, res: Res
     const invoices = await findAdminInvoicesByAdminId(adminId, { requirePdf: true });
     const projectTitles = await findProjectTitlesByIds(invoices.map((invoice) => invoice.projectId));
 
-    const adminInvoices = invoices.map((invoice) => ({
-      ...invoice,
-      projectTitle: projectTitles.get(invoice.projectId) ?? undefined,
-    }));
+    const adminInvoices = invoices.map((invoice) =>
+      withSignedPdfUrl({
+        ...invoice,
+        projectTitle: projectTitles.get(invoice.projectId) ?? undefined,
+      })
+    );
 
     return res.json({ adminInvoices });
   } catch (error) {
@@ -139,7 +155,7 @@ export async function uploadAdminInvoicePdf(
 
     return res.status(200).json({
       message: "Invoice PDF uploaded.",
-      adminInvoice,
+      adminInvoice: adminInvoice ? withSignedPdfUrl(adminInvoice) : adminInvoice,
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -217,11 +233,89 @@ export async function sendAdminInvoice(
 
     return res.status(200).json({
       message: "Invoice sent to the admin.",
-      adminInvoice,
+      adminInvoice: adminInvoice ? withSignedPdfUrl(adminInvoice) : adminInvoice,
     });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error sending admin invoice:", error);
     return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+/** GET /admin/admin-invoice/:projectId/pdf — stream invoice PDF (admin owns project). */
+export async function streamAdminPanelInvoicePdf(
+  req: AuthenticatedRequest & Request<{ projectId: string }>,
+  res: Response
+) {
+  try {
+    const adminId = req.user?.userId;
+    const role = req.user?.role;
+    if (!adminId || role !== "admin") {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const { projectId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      return res.status(400).json({ message: "Invalid project id." });
+    }
+
+    const allowed = await projectOwnedByCaller(projectId, adminId, role);
+    if (!allowed) {
+      const project = await findProjectById(projectId);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found." });
+      }
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
+    const invoice = await findAdminInvoiceByProjectId(projectId);
+    if (!invoice?.pdf) {
+      return res.status(404).json({ message: "No PDF attached for this project." });
+    }
+
+    const pdfBuffer = await fetchCloudinaryAssetBuffer(invoice.pdf);
+    const filename = invoicePdfFilename(invoice, projectId);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+    return res.send(pdfBuffer);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error streaming admin invoice PDF:", error);
+    return res.status(500).json({ message: "Failed to load invoice PDF." });
+  }
+}
+
+/** GET /superadmin/admin-invoice/:projectId/pdf — stream invoice PDF (superadmin). */
+export async function streamSuperadminInvoicePdf(
+  req: AuthenticatedRequest & Request<{ projectId: string }>,
+  res: Response
+) {
+  try {
+    const { projectId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(projectId)) {
+      return res.status(400).json({ message: "Invalid project id." });
+    }
+
+    const project = await findProjectById(projectId);
+    if (!project) {
+      return res.status(404).json({ message: "Project not found." });
+    }
+
+    const invoice = await findAdminInvoiceByProjectId(projectId);
+    if (!invoice?.pdf) {
+      return res.status(404).json({ message: "No PDF attached for this project." });
+    }
+
+    const pdfBuffer = await fetchCloudinaryAssetBuffer(invoice.pdf);
+    const filename = invoicePdfFilename(invoice, projectId);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+    return res.send(pdfBuffer);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error streaming superadmin invoice PDF:", error);
+    return res.status(500).json({ message: "Failed to load invoice PDF." });
   }
 }

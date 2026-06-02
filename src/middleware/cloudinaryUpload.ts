@@ -226,7 +226,10 @@ export async function uploadAdminInvoicePdfToCloudinary(
     const dataUri = `data:${file.mimetype};base64,${b64}`;
     const result = await cloudinary.uploader.upload(dataUri, {
       folder: CLOUDINARY_ADMIN_INVOICE_FOLDER,
-      resource_type: "auto",
+      resource_type: "raw",
+      type: "upload",
+      access_mode: "public",
+      format: "pdf",
     });
     req.uploadedPdfUrl = result.secure_url;
     next();
