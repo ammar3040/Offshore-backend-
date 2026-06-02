@@ -1077,11 +1077,13 @@ function transformRiyaResponse(data: any, origin: string, destination: string) {
           cabin: fare.Cabin,
         };
       });
+      const isMarineFare = simplifiedFares.some((fare: any) => fare.indicator === "M");
 
       return {
         id: `${firstSegment.Trackid || "flight"}-${index}-${firstSegment.DepartureDateTime.replace(/[:T-]/g, "")}`,
         legs: legs.filter(Boolean),
         fares: simplifiedFares,
+        isMarineFare,
         fareBreakdown: {
           total: firstSegment.TotalPrice,
           base: firstSegment.BasicFare,
@@ -1160,13 +1162,29 @@ function flightSortValue(flight: any, sortBy: FlightSortBy): number | null {
   }
 }
 
-function sortFlights(flights: any[], sortBy?: FlightSortBy, sortOrder: FlightSortOrder = "asc") {
-  if (!sortBy) return flights;
+function isMarineFlight(flight: any): boolean {
+  if (flight?.isMarineFare === true) return true;
+  const fares = Array.isArray(flight?.fares) ? flight.fares : [];
+  return fares.some((fare: any) => {
+    const indicator = String(fare?.indicator || "").toUpperCase();
+    const type = String(fare?.type || "").toUpperCase();
+    const name = String(fare?.name || "").toUpperCase();
+    return indicator === "M" || type === "MARINE" || name.includes("MARINE");
+  });
+}
 
+function sortFlights(flights: any[], sortBy?: FlightSortBy, sortOrder: FlightSortOrder = "asc") {
   const direction = sortOrder === "desc" ? -1 : 1;
   return flights
-    .map((flight, index) => ({ flight, index, value: flightSortValue(flight, sortBy) }))
+    .map((flight, index) => ({
+      flight,
+      index,
+      value: sortBy ? flightSortValue(flight, sortBy) : null,
+      isMarine: isMarineFlight(flight),
+    }))
     .sort((a, b) => {
+      if (a.isMarine !== b.isMarine) return a.isMarine ? -1 : 1;
+      if (!sortBy) return a.index - b.index;
       if (a.value == null && b.value == null) return a.index - b.index;
       if (a.value == null) return 1;
       if (b.value == null) return -1;
@@ -1689,6 +1707,7 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
           airlineName: o.legs[0]?.airlineName,
           airlineCode: o.legs[0]?.airlineCode,
           stops: o.stops + r.stops,
+          isMarineFare: isMarineFlight(o) || isMarineFlight(r),
         });
       }
       const flights = sortFlights(
