@@ -2,6 +2,7 @@ import mongoose, { Schema, Document, Model } from "mongoose";
 
 export enum PayrollRateType {
   PerHour = "per_hour",
+  PerDay = "per_day",
   PerProject = "per_project",
 }
 

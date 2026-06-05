@@ -17,7 +17,7 @@ export const upsertPayrollSchema = Joi.object({
     .required()
     .messages({
       "any.required": "rate_type is required",
-      "any.only": "rate_type must be per_hour or per_project",
+      "any.only": "rate_type must be per_hour, per_day, or per_project",
     }),
   pay_amount: Joi.number().min(0).required().messages({
     "any.required": "pay_amount is required",
