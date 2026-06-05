@@ -50,6 +50,8 @@ export interface Rig {
   address: string;
   description?: string;
   createdBy: mongoose.Types.ObjectId | AdminPublic;
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export interface RigDocument extends Omit<Rig, "id">, Document {
@@ -70,6 +72,7 @@ export const RigModel: Model<RigDocument> =
   mongoose.models.Rig ?? mongoose.model<RigDocument>("Rig", rigSchema);
 
 function toRig(doc: RigDocument): Rig {
+  const timestamps = doc as RigDocument & { createdAt?: Date; updatedAt?: Date };
   return {
     id: doc._id.toString(),
     name: doc.name,
@@ -78,6 +81,8 @@ function toRig(doc: RigDocument): Rig {
     createdBy: isPopulatedAdmin(doc.createdBy)
       ? toAdminPublic(doc.createdBy)
       : (doc.createdBy as mongoose.Types.ObjectId),
+    ...(timestamps.createdAt ? { createdAt: timestamps.createdAt } : {}),
+    ...(timestamps.updatedAt ? { updatedAt: timestamps.updatedAt } : {}),
   };
 }
 

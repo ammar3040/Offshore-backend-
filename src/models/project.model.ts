@@ -226,6 +226,18 @@ export async function aggregateAdminProjectAndCrewCounts(): Promise<
   return map;
 }
 
+/** Find projects assigned to the given rig. */
+export async function findProjectsByRigId(rigId: string): Promise<Project[]> {
+  if (!mongoose.Types.ObjectId.isValid(rigId)) return [];
+  const rigObjectId = new mongoose.Types.ObjectId(rigId);
+  const docs = await ProjectModel.find({ rig_id: rigObjectId })
+    .sort({ createdAt: -1 })
+    .populate("participants")
+    .populate("createdBy")
+    .populate("rig_id");
+  return docs.map((doc) => toProject(doc));
+}
+
 /** Find projects where the given crew is a participant. */
 export async function findProjectsByParticipantCrewId(crewId: string): Promise<Project[]> {
   if (!mongoose.Types.ObjectId.isValid(crewId)) return [];

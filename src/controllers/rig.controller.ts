@@ -4,8 +4,10 @@ import type { AuthenticatedRequest } from "../middleware/auth";
 import {
   ACCESS_DENIED_MESSAGE,
   isSuperAdmin,
+  projectOwnedByProject,
   rigOwnedByCaller,
 } from "../lib/resource-access";
+import { findProjectsByRigId } from "../models/project.model";
 import {
   createRig,
   deleteRig,
@@ -54,11 +56,20 @@ export async function getRigById(
       return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
     }
 
-    const rig = await findRigById(id);
+    const [rig, assignedProjects] = await Promise.all([
+      findRigById(id),
+      findProjectsByRigId(id),
+    ]);
+
     if (!rig) {
       return res.status(404).json({ message: "Rig not found." });
     }
-    return res.json({ rig });
+
+    const projects = isSuperAdmin(role)
+      ? assignedProjects
+      : assignedProjects.filter((p) => projectOwnedByProject(p, userId, role));
+
+    return res.json({ rig, projects });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching rig:", error);
