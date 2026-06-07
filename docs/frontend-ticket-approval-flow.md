@@ -24,8 +24,11 @@ type CrewTicket = {
   bookingReference?: string;
   approvedAt?: string;
   approvedBy?: string;
-  pdf?: string;
-  // existing fields remain unchanged
+  /** True when a PDF is stored server-side (private Cloudinary). */
+  hasPdf: boolean;
+  /** Authenticated backend stream — never open a raw Cloudinary URL in the browser. */
+  pdfDownloadUrl: string;
+  // existing fields remain unchanged (pdf Cloudinary URL is NOT returned to clients)
 };
 ```
 
@@ -74,40 +77,60 @@ Recommended UI mapping:
 - `UNAPPROVED`: show “Pending Approval” badge.
 - `APPROVED`: show “Approved” badge.
 - `bookingReference`: display when present, especially on detail pages.
-- Do **not** open `ticket.pdf` directly if it is a Cloudinary URL — public PDF delivery may be blocked on the Cloudinary account.
+- **Never** call `window.open(ticket.pdf)` — the API no longer returns a Cloudinary URL. Private assets return HTTP 401 in the browser.
 
 ## View / Download Approved Ticket PDF
 
-Use the authenticated backend endpoint instead of opening a stored Cloudinary URL:
+Use the authenticated backend endpoint (same pattern as admin invoices):
 
 ```http
 GET /crew-ticket/:id/pdf
 Authorization: Bearer <admin_or_superadmin_or_crew_token>
 ```
 
-This returns `Content-Type: application/pdf` and streams a valid PDF generated from the approved ticket data.
+The backend fetches the stored PDF from Cloudinary with server credentials (or generates one from ticket data) and streams bytes to the client.
 
 Suggested action rules:
 
 ```ts
-const canViewTicket = ticket.status === "APPROVED" && Boolean(ticket.bookingReference);
-const canDownloadTicket = ticket.status === "APPROVED" && Boolean(ticket.bookingReference);
+const canViewTicket =
+  ticket.status === "APPROVED" &&
+  (Boolean(ticket.bookingReference) || ticket.hasPdf);
+const canDownloadTicket = canViewTicket;
 ```
 
-Frontend download/view example:
+Frontend helper (mirror `fetchAdminInvoicePdfBlob`):
 
 ```ts
-async function openApprovedTicketPdf(ticketId: string, token: string) {
-  const res = await fetch(`${API_BASE}/crew-ticket/${ticketId}/pdf`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw new Error("Could not load ticket PDF");
-  const blob = await res.blob();
+/** Fetch crew ticket PDF via authenticated backend stream. */
+export async function fetchCrewTicketPdfBlob(ticketId: string): Promise<Blob> {
+  const response = await fetch(
+    `${env.apiBaseUrl}/crew-ticket/${encodeURIComponent(ticketId)}/pdf`,
+    { headers: { Authorization: `Bearer ${getAccessToken()}` } }
+  );
+  if (!response.ok) {
+    throw new Error("Could not load ticket PDF");
+  }
+  return response.blob();
+}
+
+async function openApprovedTicketPdf(ticket: CrewTicket) {
+  const blob = await fetchCrewTicketPdfBlob(ticket.id);
   window.open(URL.createObjectURL(blob), "_blank", "noopener,noreferrer");
+}
+
+async function downloadApprovedTicketPdf(ticket: CrewTicket) {
+  const blob = await fetchCrewTicketPdfBlob(ticket.id);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `crew-ticket-${ticket.bookingReference ?? ticket.id}.pdf`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 ```
 
-For download instead of inline view, use `Content-Disposition` from the response or create an anchor with `download`.
+Replace any `window.open(ticket.pdf)` or `<a href={ticket.pdf}>` usage with the helpers above and `ticket.pdfDownloadUrl` only as a path reference (still requires auth via `fetch`).
 
 ## Superadmin Approval UI
 

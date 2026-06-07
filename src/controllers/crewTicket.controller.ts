@@ -25,7 +25,8 @@ import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { projectRigObjectId } from "../models/project.model";
 import { sendFlightTicketEmail, sendTicketApprovalRequestEmail } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
-import { generateTicketPdfBuffer } from "../services/ticketPdf";
+import { getSignedCloudinaryDeliveryUrl } from "../lib/cloudinary-asset";
+import { resolveCrewTicketPdfBuffer } from "../services/ticketPdf";
 import {
   buildFlightSnapshotFromBookPayload,
   buildFlightTicketDataFromCrewTicket,
@@ -73,6 +74,18 @@ function projectDisplayTitle(value: unknown): string {
   return "Project";
 }
 
+/** Strip private Cloudinary URLs from API payloads — clients must use pdfDownloadUrl. */
+function withTicketPdfAccess<T extends CrewTicket>(
+  ticket: T
+): Omit<T, "pdf"> & { pdfDownloadUrl: string; hasPdf: boolean } {
+  const { pdf, ...rest } = ticket;
+  return {
+    ...rest,
+    hasPdf: Boolean(pdf),
+    pdfDownloadUrl: `/crew-ticket/${ticket.id}/pdf`,
+  };
+}
+
 function vesselDisplayName(ticket: CrewTicket): string {
   const rig = ticket.rig_id;
   if (typeof rig === "object" && rig && "name" in rig) {
@@ -99,7 +112,7 @@ export async function getCrewTickets(req: AuthenticatedRequest, res: Response) {
     const tickets = isSuperAdmin(role)
       ? await findAllCrewTickets()
       : await findCrewTicketsByAdminId(userId);
-    return res.json({ crewTickets: tickets });
+    return res.json({ crewTickets: tickets.map(withTicketPdfAccess) });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching crew tickets:", error);
@@ -148,7 +161,7 @@ export async function getCrewTicketsByCrewId(
           ).filter((t): t is NonNullable<typeof t> => t != null)
         : allTickets;
 
-    return res.json({ crewTickets: tickets });
+    return res.json({ crewTickets: tickets.map(withTicketPdfAccess) });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching crew tickets:", error);
@@ -181,7 +194,7 @@ export async function getCrewTicketById(
     if (!ticket) {
       return res.status(404).json({ message: "Crew ticket not found." });
     }
-    return res.json({ crewTicket: ticket });
+    return res.json({ crewTicket: withTicketPdfAccess(ticket) });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching crew ticket:", error);
@@ -268,7 +281,7 @@ export async function postCrewTicket(req: AuthenticatedRequest, res: Response) {
 
     return res.status(201).json({
       message: "Crew ticket created successfully.",
-      crewTicket: ticket,
+      crewTicket: withTicketPdfAccess(ticket),
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -304,7 +317,7 @@ export async function uploadTicketPdf(
     }
     return res.status(200).json({
       message: "Ticket PDF uploaded successfully.",
-      crewTicket: ticket,
+      crewTicket: withTicketPdfAccess(ticket),
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -368,7 +381,10 @@ export async function patchCrewTicket(req: AuthenticatedRequest & Request<{ id: 
     if (!ticket) {
       return res.status(404).json({ message: "Crew ticket not found." });
     }
-    return res.json({ message: "Crew ticket updated successfully.", crewTicket: ticket });
+    return res.json({
+      message: "Crew ticket updated successfully.",
+      crewTicket: withTicketPdfAccess(ticket),
+    });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error updating crew ticket:", error);
@@ -678,7 +694,7 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
 
     return res.status(201).json({
       message: `Crew ticket(s) created successfully for ${created.length} crew and sent for approval.`,
-      crewTickets: created,
+      crewTickets: created.map(withTicketPdfAccess),
       flightId,
     });
   } catch (error) {
@@ -731,7 +747,7 @@ export async function approveCrewTicket(
 
     return res.status(200).json({
       message: "Crew ticket approved successfully.",
-      crewTicket: approvedTicket,
+      crewTicket: withTicketPdfAccess(approvedTicket),
       pdfDownloadUrl: `/crew-ticket/${approvedTicket.id}/pdf`,
     });
   } catch (error) {
@@ -765,8 +781,10 @@ export async function downloadCrewTicketPdf(
     if (ticket.status !== CrewTicketStatus.Approved) {
       return res.status(403).json({ message: "Ticket PDF is available only after approval." });
     }
-    if (!ticket.bookingReference) {
-      return res.status(400).json({ message: "Ticket is missing a booking reference." });
+    if (!ticket.pdf && !ticket.bookingReference) {
+      return res.status(400).json({
+        message: "Ticket is missing a booking reference and has no uploaded PDF.",
+      });
     }
 
     const crewId = refId(ticket.crew_id);
@@ -776,26 +794,29 @@ export async function downloadCrewTicketPdf(
     }
 
     const { flight: flightData, currency } = buildFlightTicketDataFromCrewTicket(ticket);
-    const pdfBuffer = await generateTicketPdfBuffer({
-      crewFirstname: crew.firstname,
-      flight: flightData,
-      currency,
-      renderOptions: {
-        bookingReference: ticket.bookingReference,
-        passengerName: crewDisplayName(crew),
-        vesselName: vesselDisplayName(ticket),
+    const pdfBuffer = await resolveCrewTicketPdfBuffer({
+      storedPdfUrl: ticket.pdf,
+      generate: {
+        crewFirstname: crew.firstname,
+        flight: flightData,
+        currency,
+        renderOptions: {
+          bookingReference: ticket.bookingReference,
+          passengerName: crewDisplayName(crew),
+          vesselName: vesselDisplayName(ticket),
+        },
       },
     });
 
     const filename = `crew-ticket-${ticket.bookingReference}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Content-Length", pdfBuffer.length);
     return res.send(pdfBuffer);
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error downloading crew ticket PDF:", error);
-    return res.status(500).json({ message: "Internal server error." });
+    return res.status(500).json({ message: "Failed to load ticket PDF." });
   }
 }
 
@@ -833,12 +854,13 @@ export async function sendTicketToCrewEmail(
     }
 
     const { flight: flightData, currency } = buildFlightTicketDataFromCrewTicket(ticket);
+    const signedPdfUrl = ticket.pdf ? getSignedCloudinaryDeliveryUrl(ticket.pdf) ?? undefined : undefined;
     await sendFlightTicketEmail(
       crew.email,
       crew.firstname,
       flightData,
       currency,
-      ticket.pdf,
+      signedPdfUrl,
       {
         bookingReference: ticket.bookingReference,
         passengerName: crewDisplayName(crew),

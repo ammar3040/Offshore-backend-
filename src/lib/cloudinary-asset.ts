@@ -9,10 +9,10 @@ export interface ParsedCloudinaryUrl {
   format?: string;
 }
 
-/** Parse a standard Cloudinary delivery URL into resource metadata. */
+/** Parse a Cloudinary delivery URL into resource metadata (upload, authenticated, or private). */
 export function parseCloudinaryUrl(url: string): ParsedCloudinaryUrl | null {
   const match = url.match(
-    /^https?:\/\/res\.cloudinary\.com\/([^/]+)\/(image|raw|video)\/upload\/(?:v\d+\/)?(.+)$/
+    /^https?:\/\/res\.cloudinary\.com\/([^/]+)\/(image|raw|video)\/(?:upload|authenticated|private)\/(?:s--[^/]+--\/|v\d+\/)*(.+)$/i
   );
   if (!match) return null;
 
