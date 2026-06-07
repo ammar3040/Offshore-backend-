@@ -3,6 +3,7 @@ import { acceptInvite, getMyEnrolledProjects, getMyPendingInvites, inviteCrewToP
 import { authenticateAdmin, authenticateCrew } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import {
+  acceptInviteSchema,
   inviteCrewSchema,
   projectIdParamSchema,
 } from "../validations/crewInvite.validation";
@@ -24,6 +25,7 @@ router.patch(
   "/project/:project_id/accept",
   authenticateCrew,
   validate(projectIdParamSchema, "params"),
+  validate(acceptInviteSchema),
   acceptInvite
 );
 

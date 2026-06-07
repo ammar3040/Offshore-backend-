@@ -13,4 +13,10 @@ export const inviteCrewSchema = Joi.object({
     "array.min": "At least one crew_id is required",
     "any.required": "crew_ids is required",
   }),
+  contract_body: Joi.string().allow("").optional(),
+  contract_title: Joi.string().allow("").optional(),
+});
+
+export const acceptInviteSchema = Joi.object({
+  terms_agreed: Joi.boolean().valid(true).optional(),
 });

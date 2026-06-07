@@ -7,12 +7,15 @@ import {
   findAcceptedInvitesByCrewId,
   findExistingInviteCrewIdsForProject,
   findPendingInvitesByCrewId,
+  findSignedContracts,
+  updatePendingInviteContractFields,
 } from "../models";
-import { findProjectById, updateProject } from "../models/project.model";
+import { findAllProjects, findProjectById, updateProject } from "../models/project.model";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import {
   ACCESS_DENIED_MESSAGE,
   crewOwnedByCaller,
+  isSuperAdmin,
   projectOwnedByCaller,
 } from "../lib/resource-access";
 
@@ -28,7 +31,11 @@ export async function inviteCrewToProject(
     }
 
     const { project_id } = req.params;
-    const { crew_ids } = req.body as { crew_ids: string[] };
+    const { crew_ids, contract_body, contract_title } = req.body as {
+      crew_ids: string[];
+      contract_body?: string;
+      contract_title?: string;
+    };
 
     if (!mongoose.Types.ObjectId.isValid(project_id)) {
       return res.status(400).json({ message: "Invalid project_id." });
@@ -58,29 +65,51 @@ export async function inviteCrewToProject(
     const existingCrewIds = await findExistingInviteCrewIdsForProject(projectObjectId, crewObjectIds);
     const newCrewIds = crew_ids.filter((id) => !existingCrewIds.has(id));
 
-    if (newCrewIds.length === 0) {
-      return res.status(409).json({
-        message: "All selected crew members have already been invited to this project.",
-        already_invited: [...existingCrewIds],
-      });
-    }
+    const contractFields =
+      contract_body != null || contract_title != null
+        ? { contract_body, contract_title }
+        : undefined;
 
     const invites = await Promise.all(
       newCrewIds.map((crewId) =>
         createCrewInvite({
           crew_id: new mongoose.Types.ObjectId(crewId),
           project_id: projectObjectId,
+          ...(contractFields ?? {}),
         })
       )
     );
 
-    return res.status(201).json({
-      message: "Crew invitation(s) sent successfully.",
-      invites,
-      ...(existingCrewIds.size > 0 && {
+    const existingToUpdate = crew_ids.filter((id) => existingCrewIds.has(id));
+    const updatedInvites =
+      contractFields && existingToUpdate.length > 0
+        ? await updatePendingInviteContractFields(
+            projectObjectId,
+            existingToUpdate.map((id) => new mongoose.Types.ObjectId(id)),
+            contractFields
+          )
+        : [];
+
+    if (newCrewIds.length === 0 && updatedInvites.length === 0) {
+      return res.status(409).json({
+        message: "All selected crew members have already been invited to this project.",
         already_invited: [...existingCrewIds],
-        skipped_message: `${existingCrewIds.size} crew member(s) already invited and were skipped.`,
-      }),
+      });
+    }
+
+    const statusCode = newCrewIds.length > 0 ? 201 : 200;
+    return res.status(statusCode).json({
+      message:
+        newCrewIds.length > 0
+          ? "Crew invitation(s) sent successfully."
+          : "Contract details updated on existing invitation(s).",
+      invites,
+      ...(updatedInvites.length > 0 && { updated_invites: updatedInvites }),
+      ...(existingCrewIds.size > 0 &&
+        newCrewIds.length > 0 && {
+          already_invited: [...existingCrewIds],
+          skipped_message: `${existingCrewIds.size} crew member(s) already invited and were skipped.`,
+        }),
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -142,14 +171,17 @@ export async function acceptInvite(
 
     const { project_id } = req.params;
 
-    const invite = await acceptCrewInvite(userId, project_id);
-    if (!invite) {
-      return res.status(404).json({ message: "Invite not found or already accepted." });
-    }
-
     const project = await findProjectById(project_id);
     if (!project) {
       return res.status(404).json({ message: "Project not found." });
+    }
+
+    const contractEndDate = new Date(project.duration.endDate);
+    const invite = await acceptCrewInvite(userId, project_id, {
+      contract_end_date: contractEndDate,
+    });
+    if (!invite) {
+      return res.status(404).json({ message: "Invite not found or already accepted." });
     }
 
     const participantIds = (project.participants ?? []).map((p) =>
@@ -163,18 +195,42 @@ export async function acceptInvite(
     }
 
     const startDate = new Date(project.duration.startDate);
-    const endDate = new Date(project.duration.endDate);
     await createTimesheetForCrewProject(
       crewObjectId,
       new mongoose.Types.ObjectId(project_id),
       startDate,
-      endDate
+      contractEndDate
     );
 
     return res.json({ message: "Invite accepted successfully.", invite });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error accepting invite:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function getSignedContracts(req: AuthenticatedRequest, res: Response) {
+  try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    let contracts;
+    if (isSuperAdmin(role)) {
+      contracts = await findSignedContracts();
+    } else {
+      const projects = await findAllProjects({ createdBy: userId });
+      const projectIds = projects.map((p) => new mongoose.Types.ObjectId(p.id));
+      contracts = await findSignedContracts({ projectIds });
+    }
+
+    return res.json({ contracts });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching signed contracts:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
