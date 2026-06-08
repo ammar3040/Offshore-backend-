@@ -1,7 +1,7 @@
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { Response } from "express";
-import { sendCrewWelcomeEmail } from "../services/email";
+// import { sendCrewWelcomeEmail } from "../services/email";
 import {
   createCrew,
   deleteCrew,
@@ -462,7 +462,7 @@ export async function postCrew(
     // eslint-disable-next-line no-console
     console.log("Crew created - generated password for", result.data.email, ":", plainPassword);
 
-    await sendCrewWelcomeEmail(result.data.email, result.data.firstname, plainPassword);
+    // await sendCrewWelcomeEmail(result.data.email, result.data.firstname, plainPassword);
 
     return res.status(201).json({
       message: "Crew created successfully.",

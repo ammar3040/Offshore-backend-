@@ -469,8 +469,8 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
     }
 
     const body = req.body as {
-      project_id: string;
-      crew_ids: string[];
+      project_id?: string;
+      crew_ids?: string[];
       flight: {
         id: string;
         legs: Array<{
@@ -490,33 +490,45 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       currency?: string;
     };
 
-    if (!mongoose.Types.ObjectId.isValid(body.project_id)) {
-      return res.status(400).json({ message: "Invalid project_id." });
+    const crewIdsArray = Array.isArray(body.crew_ids) ? body.crew_ids : [];
+
+    if (body.project_id != null && body.project_id !== "") {
+      if (!mongoose.Types.ObjectId.isValid(body.project_id)) {
+        return res.status(400).json({ message: "Invalid project_id." });
+      }
     }
 
-    if (new Set(body.crew_ids).size !== body.crew_ids.length) {
+    if (crewIdsArray.length > 0 && new Set(crewIdsArray).size !== crewIdsArray.length) {
       return res.status(400).json({ message: "crew_ids must not contain duplicate values." });
     }
 
-    const project = await findProjectById(body.project_id);
-    if (!project) {
-      return res.status(404).json({ message: "Project not found." });
-    }
-    if (!projectOwnedByProject(project, actorUserId, role)) {
-      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    let project: Awaited<ReturnType<typeof findProjectById>> = null;
+    if (body.project_id) {
+      project = await findProjectById(body.project_id);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found." });
+      }
+      if (!projectOwnedByProject(project, actorUserId, role)) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
     }
 
-    for (const crewId of body.crew_ids) {
+    for (const crewId of crewIdsArray) {
       if (!(await crewOwnedByCaller(crewId, actorUserId, role))) {
         return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
       }
     }
 
-    const projectRigId = projectRigObjectId(project);
+    const projectRigId = project ? projectRigObjectId(project) : undefined;
 
-    const admin = project.createdBy;
-    const adminId =
-      typeof admin === "object" && admin && "id" in admin ? (admin as { id: string }).id : null;
+    const adminId = project
+      ? (() => {
+          const admin = project.createdBy;
+          return typeof admin === "object" && admin && "id" in admin
+            ? (admin as { id: string }).id
+            : null;
+        })()
+      : actorUserId;
 
     const fl = body.flight;
     const flightId = fl.id;
@@ -584,7 +596,7 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
     const invalidCrewIds: string[] = [];
     const missingCrewIds: string[] = [];
 
-    for (const crewId of body.crew_ids) {
+    for (const crewId of crewIdsArray) {
       if (!mongoose.Types.ObjectId.isValid(crewId)) {
         invalidCrewIds.push(crewId);
         continue;
@@ -609,19 +621,23 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
     }
 
     const created: import("../models/crewTicket.model").CrewTicket[] = [];
-    let runningBalance = await sumMarkupByProject(body.project_id);
+    let runningBalance = body.project_id ? await sumMarkupByProject(body.project_id) : 0;
     const flightSnapshot = buildFlightSnapshotFromBookPayload(
       fl,
       requestCurrency,
       payloadPriceRaw
     );
 
-    for (const crewId of body.crew_ids) {
+    const ticketTargets =
+      crewIdsArray.length > 0 ? crewIdsArray.map((crewId) => ({ crewId })) : [{ crewId: undefined }];
+
+    for (const { crewId } of ticketTargets) {
       runningBalance += markupGBP;
 
       const ticket = await createCrewTicket({
-        crew_id: new mongoose.Types.ObjectId(crewId),
-        project_id: new mongoose.Types.ObjectId(body.project_id),
+        ...(crewId ? { crew_id: new mongoose.Types.ObjectId(crewId) } : {}),
+        ...(body.project_id ? { project_id: new mongoose.Types.ObjectId(body.project_id) } : {}),
+        ...(!body.project_id ? { createdBy: new mongoose.Types.ObjectId(actorUserId) } : {}),
         ...(projectRigId ? { rig_id: projectRigId } : {}),
         from,
         to,
@@ -659,13 +675,13 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
 
     await Promise.all(
       created.map(async (ticket) => {
-        const crewId = refId(ticket.crew_id);
-        const crew = await findCrewByCrewId(crewId);
+        const crewId = ticket.crew_id ? refId(ticket.crew_id) : null;
+        const crew = crewId ? await findCrewByCrewId(crewId) : null;
         const { flight: flightData, currency } = buildFlightTicketDataFromCrewTicket(ticket);
         await sendTicketApprovalRequestEmail({
           ticketId: ticket.id,
           crewName: crewDisplayName(crew ?? ticket.crew_id),
-          projectTitle: projectDisplayTitle(ticket.project_id) || project.title,
+          projectTitle: projectDisplayTitle(ticket.project_id) || project?.title || "Unassigned",
           vesselName: vesselDisplayName(ticket),
           flight: flightData,
           currency,
@@ -676,8 +692,12 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       })
     );
 
+    const crewLabel =
+      crewIdsArray.length > 0
+        ? ` for ${created.length} crew member${created.length === 1 ? "" : "s"}`
+        : "";
     return res.status(201).json({
-      message: `Crew ticket(s) created successfully for ${created.length} crew and sent for approval.`,
+      message: `Crew ticket(s) created successfully${crewLabel} and sent for approval.`,
       crewTickets: created.map(withTicketPdfAccess),
       flightId,
     });

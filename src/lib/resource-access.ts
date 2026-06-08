@@ -96,6 +96,17 @@ export async function ticketAccessibleByCaller(
 
   if (isSuperAdmin(role)) return true;
 
+  if (!ticket.project_id) {
+    if (!ticket.createdBy) return false;
+    const createdById =
+      typeof ticket.createdBy === "object" &&
+      ticket.createdBy &&
+      "_id" in (ticket.createdBy as object)
+        ? (ticket.createdBy as { _id: { toString: () => string } })._id.toString()
+        : String(ticket.createdBy);
+    return createdById === userId;
+  }
+
   const projectId =
     typeof ticket.project_id === "object" && ticket.project_id && "_id" in (ticket.project_id as object)
       ? (ticket.project_id as { _id: { toString: () => string } })._id.toString()

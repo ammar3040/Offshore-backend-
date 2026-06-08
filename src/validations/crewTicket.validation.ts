@@ -100,17 +100,14 @@ export const searchFlightsSchema = Joi.object({
   arrivalTime: Joi.string().pattern(timePattern).optional().messages({
     "string.pattern.base": "arrivalTime must be HH:mm (e.g. 18:45)",
   }),
+  project_id: objectId.optional(),
+  crew_ids: Joi.array().items(objectId).optional().default([]),
 }).unknown(true);
 
 /** For POST /book - pass selected flight from search response (Option 1) */
 export const bookFlightSchema = Joi.object({
-  project_id: objectId.required().messages({
-    "any.required": "project_id is required",
-  }),
-  crew_ids: Joi.array().items(objectId).min(1).required().messages({
-    "any.required": "crew_ids is required",
-    "array.min": "At least one crew_id is required",
-  }),
+  project_id: objectId.optional(),
+  crew_ids: Joi.array().items(objectId).optional().default([]),
   flight: Joi.object({
     id: Joi.string().required().messages({
       "any.required": "flight.id is required",

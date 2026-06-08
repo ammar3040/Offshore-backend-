@@ -63,8 +63,10 @@ export interface CrewTicketFlightSnapshot {
 
 export interface CrewTicket {
   id: string;
-  crew_id: mongoose.Types.ObjectId;
-  project_id: mongoose.Types.ObjectId;
+  crew_id?: mongoose.Types.ObjectId;
+  project_id?: mongoose.Types.ObjectId;
+  /** Admin who booked the ticket when no project is assigned. */
+  createdBy?: mongoose.Types.ObjectId;
   /** Oil rig assignment (optional). */
   rig_id?: mongoose.Types.ObjectId;
   from: AirportLocation;
@@ -166,8 +168,9 @@ const flightSnapshotSchema = new Schema<CrewTicketFlightSnapshot>(
 
 const crewTicketSchema = new Schema<CrewTicketDocument>(
   {
-    crew_id: { type: Schema.Types.ObjectId, ref: "Crew", required: true },
-    project_id: { type: Schema.Types.ObjectId, ref: "Project", required: true },
+    crew_id: { type: Schema.Types.ObjectId, ref: "Crew", required: false },
+    project_id: { type: Schema.Types.ObjectId, ref: "Project", required: false },
+    createdBy: { type: Schema.Types.ObjectId, ref: "Admin", required: false },
     rig_id: { type: Schema.Types.ObjectId, ref: "Rig", required: false },
     from: { type: airportLocationSchema, required: true },
     to: { type: airportLocationSchema, required: true },
@@ -216,6 +219,7 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     id: doc._id.toString(),
     crew_id: doc.crew_id,
     project_id: doc.project_id,
+    createdBy: doc.createdBy,
     rig_id: doc.rig_id,
     from: doc.from,
     to: doc.to,
@@ -269,12 +273,25 @@ export async function findAllCrewTickets(): Promise<CrewTicket[]> {
 
 export async function findCrewTicketsByAdminId(adminId: string): Promise<CrewTicket[]> {
   if (!mongoose.Types.ObjectId.isValid(adminId)) return [];
-  const projectDocs = await ProjectModel.find({
-    createdBy: new mongoose.Types.ObjectId(adminId),
-  }).select("_id");
+  const adminObjectId = new mongoose.Types.ObjectId(adminId);
+  const projectDocs = await ProjectModel.find({ createdBy: adminObjectId }).select("_id");
   const projectIds = projectDocs.map((p) => p._id);
-  if (projectIds.length === 0) return [];
-  const docs = await CrewTicketModel.find({ project_id: { $in: projectIds } })
+  const accessFilter =
+    projectIds.length > 0
+      ? {
+          $or: [
+            { project_id: { $in: projectIds } },
+            {
+              createdBy: adminObjectId,
+              $or: [{ project_id: null }, { project_id: { $exists: false } }],
+            },
+          ],
+        }
+      : {
+          createdBy: adminObjectId,
+          $or: [{ project_id: null }, { project_id: { $exists: false } }],
+        };
+  const docs = await CrewTicketModel.find(accessFilter)
     .sort({ createdAt: -1 })
     .populate("crew_id")
     .populate("project_id")
