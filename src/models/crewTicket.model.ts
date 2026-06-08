@@ -293,11 +293,7 @@ export async function findCrewTicketByProjectAndCrew(
   return doc ? toCrewTicket(doc) : null;
 }
 
-/**
- * Conflict if an existing ticket for this crew+project blocks a hypothetical booking —
- * legacy row without travel bounds blocks any re-book; otherwise same travel window (start+end) blocks.
- * (POST /book uses {@link findCrewTicketByProjectAndCrew}: any ticket for the project+crew is a conflict.)
- */
+/** Find an existing ticket with the same crew, project, and travel window (optional duplicate detection). */
 export async function findCrewTicketBookConflict(
   projectId: string,
   crewId: string,

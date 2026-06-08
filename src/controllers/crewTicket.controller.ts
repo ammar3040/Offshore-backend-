@@ -6,7 +6,6 @@ import {
   createCrewTicket,
   deleteCrewTicket,
   findAdminById,
-  findCrewTicketByProjectAndCrew,
   findCrewTicketById,
   findAllCrewTickets,
   findCrewTicketsByAdminId,
@@ -249,13 +248,6 @@ export async function postCrewTicket(req: AuthenticatedRequest, res: Response) {
       return res.status(404).json({ message: "Crew not found." });
     }
 
-    const existing = await findCrewTicketByProjectAndCrew(body.project_id, body.crew_id);
-    if (existing) {
-      return res.status(409).json({
-        message: "A crew ticket already exists for this project and crew.",
-      });
-    }
-
     const rigResolved = await resolveOptionalRigAttachment(body.rig_id, actorUserId, role);
     if (!rigResolved.ok) {
       return res.status(rigResolved.status).json({ message: rigResolved.message });
@@ -439,7 +431,7 @@ function cabinToClass(cabin: string): CabinClass {
   return CabinClass.Economy;
 }
 
-/** Outbound start and final arrival from search/book flight legs (same travel period = duplicate). */
+/** Outbound start and final arrival from search/book flight legs. */
 function parseTravelBoundsFromBookFlight(legs: unknown): { travelStart: Date; travelEnd: Date } | null {
   if (!Array.isArray(legs) || legs.length === 0) return null;
   const first = legs[0] as {
@@ -591,7 +583,6 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
 
     const invalidCrewIds: string[] = [];
     const missingCrewIds: string[] = [];
-    const duplicateCrewIds: string[] = [];
 
     for (const crewId of body.crew_ids) {
       if (!mongoose.Types.ObjectId.isValid(crewId)) {
@@ -601,11 +592,6 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       const crew = await findCrewByCrewId(crewId);
       if (!crew) {
         missingCrewIds.push(crewId);
-        continue;
-      }
-      const existingTicket = await findCrewTicketByProjectAndCrew(body.project_id, crewId);
-      if (existingTicket) {
-        duplicateCrewIds.push(crewId);
       }
     }
 
@@ -619,12 +605,6 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       return res.status(404).json({
         message: "Crew not found for one or more crew_id(s).",
         crew_ids: missingCrewIds,
-      });
-    }
-    if (duplicateCrewIds.length > 0) {
-      return res.status(409).json({
-        message:
-          "Crew ticket already exists for this project"
       });
     }
 
