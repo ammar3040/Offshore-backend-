@@ -3,7 +3,7 @@ import path from "path";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const mjml2html = require("mjml") as (mjml: string) => { html: string };
 import nodemailer from "nodemailer";
-import { fetchCloudinaryAssetBuffer } from "../lib/cloudinary-asset";
+import { fetchCloudinaryAssetBuffer, parseCloudinaryUrl } from "../lib/cloudinary-asset";
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -130,6 +130,22 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function mimeTypeFromCloudinaryFormat(format?: string): string {
+  const ext = (format ?? "pdf").toLowerCase();
+  if (ext === "pdf") return "application/pdf";
+  if (ext === "png") return "image/png";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "webp") return "image/webp";
+  if (ext === "gif") return "image/gif";
+  return "application/octet-stream";
+}
+
+function cloudinaryAttachmentFilename(baseName: string, format?: string): string {
+  const ext = (format ?? "pdf").toLowerCase();
+  const safe = baseName.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return `${safe}.${ext}`;
 }
 
 function airportLabel(full?: string, fallback?: string): string {
@@ -468,6 +484,8 @@ export async function sendTicketApprovalRequestEmail(args: {
   flight: FlightTicketData;
   currency: string;
   price: number;
+  passportNumber?: string;
+  passportDocumentUrl?: string;
 }): Promise<void> {
   const from = process.env.SMTP_FROM || process.env.SMTP_USER || "noreply@marine-flight.com";
   const flattened = flattenSegments(args.flight);
@@ -484,14 +502,44 @@ export async function sendTicketApprovalRequestEmail(args: {
       </tr>`;
   }).join("");
 
+  const passportRow = args.passportNumber
+    ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Passport Number</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.passportNumber)}</td></tr>`
+    : "";
+  const passportAttachmentNote = args.passportDocumentUrl
+    ? "<p>The crew member's passport document is attached to this email.</p>"
+    : "";
+
+  const attachments: Array<{
+    filename: string;
+    content: Buffer;
+    contentType: string;
+  }> = [];
+
+  if (args.passportDocumentUrl) {
+    try {
+      const parsed = parseCloudinaryUrl(args.passportDocumentUrl);
+      const passportBuffer = await fetchCloudinaryAssetBuffer(args.passportDocumentUrl);
+      attachments.push({
+        filename: cloudinaryAttachmentFilename(`passport-${args.crewName}`, parsed?.format),
+        content: passportBuffer,
+        contentType: mimeTypeFromCloudinaryFormat(parsed?.format),
+      });
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to attach crew passport to approval email:", error);
+    }
+  }
+
   const html = `
     <div style="font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.5;">
       <h2 style="margin:0 0 12px;">Crew Ticket Approval Required</h2>
       <p>A crew ticket has been booked and is waiting for superadmin approval.</p>
+      ${passportAttachmentNote}
       <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:16px 0;width:100%;max-width:720px;">
         <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Ticket ID</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.ticketId)}</td></tr>
         <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Status</td><td style="padding:8px;border:1px solid #e5e7eb;">UNAPPROVED</td></tr>
         <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Crew</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.crewName)}</td></tr>
+        ${passportRow}
         <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Project</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.projectTitle)}</td></tr>
         <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Vessel</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.vesselName || "—")}</td></tr>
         <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Fare</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.currency)} ${args.price}</td></tr>
@@ -514,5 +562,6 @@ export async function sendTicketApprovalRequestEmail(args: {
     to: "vishwajeetbharadiya12@gmail.com",
     subject: `Crew Ticket Approval Required - ${args.crewName}`,
     html,
+    ...(attachments.length > 0 ? { attachments } : {}),
   });
 }

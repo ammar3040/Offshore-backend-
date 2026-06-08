@@ -659,15 +659,19 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
 
     await Promise.all(
       created.map(async (ticket) => {
+        const crewId = refId(ticket.crew_id);
+        const crew = await findCrewByCrewId(crewId);
         const { flight: flightData, currency } = buildFlightTicketDataFromCrewTicket(ticket);
         await sendTicketApprovalRequestEmail({
           ticketId: ticket.id,
-          crewName: crewDisplayName(ticket.crew_id),
+          crewName: crewDisplayName(crew ?? ticket.crew_id),
           projectTitle: projectDisplayTitle(ticket.project_id) || project.title,
           vesselName: vesselDisplayName(ticket),
           flight: flightData,
           currency,
           price: ticket.price,
+          passportNumber: crew?.passport?.passport_number,
+          passportDocumentUrl: crew?.passport?.passport_document,
         });
       })
     );
