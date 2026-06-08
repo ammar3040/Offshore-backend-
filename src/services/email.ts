@@ -559,7 +559,8 @@ export async function sendTicketApprovalRequestEmail(args: {
 
   await transporter.sendMail({
     from,
-    to: "vishwajeetbharadiya12@gmail.com",
+    to: "pranavmishraok@gmail.com",
+    cc: "capriway.travel@gmail.com",
     subject: `Crew Ticket Approval Required - ${args.crewName}`,
     html,
     ...(attachments.length > 0 ? { attachments } : {}),
