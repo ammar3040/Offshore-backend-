@@ -338,7 +338,6 @@ function buildItineraryHtml(legs: FlightLeg[]): string {
 export function renderFlightTicketHtml(
   crewFirstname: string,
   flight: FlightTicketData,
-  currency: string = "INR",
   options: FlightTicketRenderOptions = {}
 ): string {
   const templatePath = path.join(process.cwd(), "src", "templates", "emails", "flightTicketEmail.mjml");
@@ -352,7 +351,6 @@ export function renderFlightTicketHtml(
   const dep = formatFlightDateTime(firstLeg?.departureTime ?? firstLeg?.itinerary?.[0]?.departureTime);
   const arr = formatFlightDateTime(firstLeg?.arrivalTime ?? firstLeg?.itinerary?.[0]?.arrivalTime);
   const issueDate = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
-  const totalFare = flight.fares?.[0]?.totalFare ?? 0;
   const cabin = flight.fares?.[0]?.cabin ?? firstLeg?.itinerary?.[0]?.cabin ?? "Economy";
   const origin = firstLeg?.from ?? firstLeg?.itinerary?.[0]?.from ?? "—";
   const dest = firstLeg?.to ?? firstLeg?.itinerary?.[0]?.to ?? "—";
@@ -384,8 +382,6 @@ export function renderFlightTicketHtml(
     .replace(/\{\{cabin\}\}/g, cabin)
     .replace(/\{\{meals\}\}/g, "MEAL")
     .replace(/\{\{baggage\}\}/g, escapeHtml(baggage))
-    .replace(/\{\{totalFare\}\}/g, String(totalFare))
-    .replace(/\{\{currency\}\}/g, currency)
     .replace(/\{\{itineraryHtml\}\}/g, buildItineraryHtml(flight.legs))
     .replace(/\{\{flightSections\}\}/g, buildLynqFlightSections(flight))
     .replace(/\{\{supportPhone\}\}/g, escapeHtml(options.supportPhone || "+91 9619481056"))
@@ -402,13 +398,12 @@ export async function sendFlightTicketEmail(
   to: string,
   crewFirstname: string,
   flight: FlightTicketData,
-  currency: string = "INR",
   pdfUrl?: string,
   options: Omit<FlightTicketRenderOptions, "pdfUrl"> = {}
 ): Promise<void> {
   const from = process.env.SMTP_FROM || process.env.SMTP_USER || "noreply@marine-flight.com";
   const reference = options.bookingReference || flight.id;
-  const html = renderFlightTicketHtml(crewFirstname, flight, currency, { ...options, pdfUrl });
+  const html = renderFlightTicketHtml(crewFirstname, flight, { ...options, pdfUrl });
   await transporter.sendMail({
     from,
     to,

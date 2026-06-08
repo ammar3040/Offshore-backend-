@@ -797,13 +797,12 @@ export async function downloadCrewTicketPdf(
       return res.status(404).json({ message: "Crew not found." });
     }
 
-    const { flight: flightData, currency } = buildFlightTicketDataFromCrewTicket(ticket);
+    const { flight: flightData } = buildFlightTicketDataFromCrewTicket(ticket);
     const pdfBuffer = await resolveCrewTicketPdfBuffer({
       storedPdfUrl: ticket.pdf,
       generate: {
         crewFirstname: crew.firstname,
         flight: flightData,
-        currency,
         renderOptions: {
           bookingReference: ticket.bookingReference,
           passengerName: crewDisplayName(crew),
@@ -857,13 +856,12 @@ export async function sendTicketToCrewEmail(
       return res.status(404).json({ message: "Crew not found." });
     }
 
-    const { flight: flightData, currency } = buildFlightTicketDataFromCrewTicket(ticket);
+    const { flight: flightData } = buildFlightTicketDataFromCrewTicket(ticket);
     const signedPdfUrl = ticket.pdf ? getSignedCloudinaryDeliveryUrl(ticket.pdf) ?? undefined : undefined;
     await sendFlightTicketEmail(
       crew.email,
       crew.firstname,
       flightData,
-      currency,
       signedPdfUrl,
       {
         bookingReference: ticket.bookingReference,

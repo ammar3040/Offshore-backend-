@@ -6,7 +6,6 @@ import { renderFlightTicketHtml, type FlightTicketData, type FlightTicketRenderO
 export type TicketPdfInput = {
   crewFirstname: string;
   flight: FlightTicketData;
-  currency: string;
   renderOptions: FlightTicketRenderOptions;
 };
 
@@ -91,7 +90,6 @@ export async function generateTicketPdfBuffer(input: TicketPdfInput): Promise<Bu
   const html = renderFlightTicketHtml(
     input.crewFirstname,
     input.flight,
-    input.currency,
     input.renderOptions
   );
   const browser = await launchPdfBrowser();
@@ -163,13 +161,11 @@ export async function generateAndUploadTicketPdf(args: {
   ticketId: string;
   crewFirstname: string;
   flight: FlightTicketData;
-  currency: string;
   renderOptions: FlightTicketRenderOptions;
 }): Promise<string> {
   const buffer = await generateTicketPdfBuffer({
     crewFirstname: args.crewFirstname,
     flight: args.flight,
-    currency: args.currency,
     renderOptions: args.renderOptions,
   });
   return uploadPdfBuffer(buffer, `crew-ticket-${args.ticketId}-${Date.now()}`);
