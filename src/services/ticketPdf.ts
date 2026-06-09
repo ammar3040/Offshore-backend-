@@ -11,6 +11,52 @@ export type TicketPdfInput = {
 
 const SERVERLESS_CHROME_ARGS = ["--no-sandbox", "--disable-setuid-sandbox"];
 
+/**
+ * MJML lays out columns with `@media only screen` rules, but Puppeteer PDF defaults
+ * to print media — columns then stay at inline `width:100%` and stack vertically.
+ */
+const PDF_LAYOUT_STYLES = `
+  @page { margin: 0; size: A4; }
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  div[style*="max-width:600px"] {
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+  }
+  .mj-column-per-60,
+  .mj-column-per-40,
+  .mj-column-per-65,
+  .mj-column-per-35,
+  .mj-column-per-30,
+  .mj-column-per-50,
+  .mj-column-per-25,
+  .mj-column-per-100 {
+    display: inline-block !important;
+    vertical-align: top !important;
+  }
+  .mj-column-per-60 { width: 60% !important; max-width: 60% !important; }
+  .mj-column-per-40 { width: 40% !important; max-width: 40% !important; }
+  .mj-column-per-65 { width: 65% !important; max-width: 65% !important; }
+  .mj-column-per-35 { width: 35% !important; max-width: 35% !important; }
+  .mj-column-per-30 { width: 30% !important; max-width: 30% !important; }
+  .mj-column-per-50 { width: 50% !important; max-width: 50% !important; }
+  .mj-column-per-25 { width: 25% !important; max-width: 25% !important; }
+  .mj-column-per-100 { width: 100% !important; max-width: 100% !important; }
+`;
+
+function prepareTicketHtmlForPdf(html: string): string {
+  const styleTag = `<style id="ticket-pdf-layout">${PDF_LAYOUT_STYLES}</style>`;
+  if (html.includes("</head>")) {
+    return html.replace("</head>", `${styleTag}</head>`);
+  }
+  return `${styleTag}${html}`;
+}
+
 function isServerlessRuntime(): boolean {
   return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 }
@@ -87,16 +133,15 @@ async function launchPdfBrowser(): Promise<Browser> {
 }
 
 export async function generateTicketPdfBuffer(input: TicketPdfInput): Promise<Buffer> {
-  const html = renderFlightTicketHtml(
-    input.crewFirstname,
-    input.flight,
-    input.renderOptions
+  const html = prepareTicketHtmlForPdf(
+    renderFlightTicketHtml(input.crewFirstname, input.flight, input.renderOptions)
   );
   const browser = await launchPdfBrowser();
 
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load" });
+    await page.emulateMediaType("screen");
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,

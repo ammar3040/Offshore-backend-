@@ -53,25 +53,25 @@
     </mj-section>
 
     <mj-section background-color="#F5F7FA" padding="12px 30px" border-bottom="1px solid #DDDDDD">
-      <mj-column>
+      <mj-column width="25%">
         <mj-text padding="0" align="center">
           <span class="label">Class</span><br/>
           <span class="value">{{cabin}}</span>
         </mj-text>
       </mj-column>
-      <mj-column>
+      <mj-column width="25%">
         <mj-text padding="0" align="center">
           <span class="label">Meals</span><br/>
           <span class="value">{{meals}}</span>
         </mj-text>
       </mj-column>
-      <mj-column>
+      <mj-column width="25%">
         <mj-text padding="0" align="center">
           <span class="label">Baggage</span><br/>
           <span class="value">{{baggage}}</span>
         </mj-text>
       </mj-column>
-      <mj-column>
+      <mj-column width="25%">
         <mj-text padding="0" align="center">
           <span class="label">Issued</span><br/>
           <span class="value">{{issueDate}}</span>

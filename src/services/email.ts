@@ -250,15 +250,15 @@ function buildLynqFlightSections(flight: FlightTicketData): string {
     </mj-section>
 
     <mj-section background-color="#FFFFFF" padding="10px 30px" border-top="1px solid #EEEEEE">
-      <mj-column width="50%" border-right="1px solid #DDDDDD">
-        <mj-text padding="0">
+      <mj-column width="50%">
+        <mj-text padding="0 16px 0 0">
           <span class="label">Departure</span><br/>
           <span class="time">${escapeHtml(dep.time)}</span><br/>
           <span style="font-size:11px;color:#1A3A6B;">${escapeHtml(dep.date.toUpperCase())}</span>
         </mj-text>
       </mj-column>
       <mj-column width="50%">
-        <mj-text padding="0 0 0 20px">
+        <mj-text padding="0 0 0 16px">
           <span class="label">Arrival</span><br/>
           <span class="time">${escapeHtml(arr.time)}</span><br/>
           <span style="font-size:11px;color:#1A3A6B;">${escapeHtml(arr.date.toUpperCase())}</span>
