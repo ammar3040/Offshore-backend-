@@ -25,7 +25,7 @@ import { projectRigObjectId } from "../models/project.model";
 import { sendFlightTicketEmail, sendTicketApprovalRequestEmail } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
 import { getSignedCloudinaryDeliveryUrl } from "../lib/cloudinary-asset";
-import { resolveCrewTicketPdfBuffer } from "../services/ticketPdf";
+import { generateAndUploadTicketPdf, resolveCrewTicketPdfBuffer } from "../services/ticketPdf";
 import {
   buildFlightSnapshotFromBookPayload,
   buildFlightTicketDataFromCrewTicket,
@@ -749,10 +749,32 @@ export async function approveCrewTicket(
       return res.status(404).json({ message: "Crew ticket not found." });
     }
 
+    const { flight: flightData } = buildFlightTicketDataFromCrewTicket(approvedTicket);
+    let ticketWithPdf = approvedTicket;
+    try {
+      const pdfUrl = await generateAndUploadTicketPdf({
+        ticketId: approvedTicket.id,
+        crewFirstname: crew.firstname,
+        flight: flightData,
+        renderOptions: {
+          bookingReference: trimmedReference,
+          passengerName: crewDisplayName(crew),
+          vesselName: vesselDisplayName(approvedTicket),
+        },
+      });
+      const updated = await updateCrewTicket(id, { pdf: pdfUrl });
+      if (updated) {
+        ticketWithPdf = updated;
+      }
+    } catch (pdfError) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to generate ticket PDF on approval:", pdfError);
+    }
+
     return res.status(200).json({
       message: "Crew ticket approved successfully.",
-      crewTicket: withTicketPdfAccess(approvedTicket),
-      pdfDownloadUrl: `/crew-ticket/${approvedTicket.id}/pdf`,
+      crewTicket: withTicketPdfAccess(ticketWithPdf),
+      pdfDownloadUrl: `/crew-ticket/${ticketWithPdf.id}/pdf`,
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -798,8 +820,9 @@ export async function downloadCrewTicketPdf(
     }
 
     const { flight: flightData } = buildFlightTicketDataFromCrewTicket(ticket);
-    const pdfBuffer = await resolveCrewTicketPdfBuffer({
+    const { buffer: pdfBuffer, uploadedPdfUrl } = await resolveCrewTicketPdfBuffer({
       storedPdfUrl: ticket.pdf,
+      persistTicketId: ticket.id,
       generate: {
         crewFirstname: crew.firstname,
         flight: flightData,
@@ -810,6 +833,10 @@ export async function downloadCrewTicketPdf(
         },
       },
     });
+
+    if (uploadedPdfUrl) {
+      await updateCrewTicket(ticket.id, { pdf: uploadedPdfUrl });
+    }
 
     const filename = `crew-ticket-${ticket.bookingReference}.pdf`;
     res.setHeader("Content-Type", "application/pdf");

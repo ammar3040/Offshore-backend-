@@ -188,6 +188,7 @@ export async function uploadCrewTicketPdfToCloudinary(
       folder: CLOUDINARY_CREW_TICKET_FOLDER,
       resource_type: "raw",
       type: "upload",
+      access_mode: "public",
       format: "pdf",
     });
     req.uploadedPdfUrl = result.secure_url;

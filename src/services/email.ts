@@ -18,8 +18,16 @@ const transporter = nodemailer.createTransport({
       : undefined,
 });
 
+function resolveEmailTemplatePath(filename: string): string {
+  const bundled = path.join(__dirname, "..", "templates", "emails", filename);
+  if (fs.existsSync(bundled)) {
+    return bundled;
+  }
+  return path.join(process.cwd(), "src", "templates", "emails", filename);
+}
+
 function getOnboardingEmailHtml(firstname: string, email: string, password: string): string {
-  const templatePath = path.join(process.cwd(), "src", "templates", "emails", "onboardingEmail.mjml");
+  const templatePath = resolveEmailTemplatePath("onboardingEmail.mjml");
   const mjmlSource = fs.readFileSync(templatePath, "utf-8");
   const mjmlWithVars = mjmlSource
     .replace(/\{\{firstname\}\}/g, firstname)
@@ -340,7 +348,7 @@ export function renderFlightTicketHtml(
   flight: FlightTicketData,
   options: FlightTicketRenderOptions = {}
 ): string {
-  const templatePath = path.join(process.cwd(), "src", "templates", "emails", "flightTicketEmail.mjml");
+  const templatePath = resolveEmailTemplatePath("flightTicketEmail.mjml");
   const mjmlSource = fs.readFileSync(templatePath, "utf-8");
 
   const pdfLinkHtml = options.pdfUrl

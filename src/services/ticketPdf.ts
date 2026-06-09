@@ -138,19 +138,33 @@ async function loadFullPuppeteer() {
   return importer("puppeteer");
 }
 
+export type TicketPdfResolveResult = {
+  buffer: Buffer;
+  /** Set when a fresh PDF was generated and uploaded to Cloudinary. */
+  uploadedPdfUrl?: string;
+};
+
+async function launchServerlessBrowser(
+  chromium: typeof import("@sparticuz/chromium").default,
+  puppeteer: typeof import("puppeteer-core")
+): Promise<Browser> {
+  chromium.setGraphicsMode = false;
+  return puppeteer.launch({
+    args: [...chromium.args, ...SERVERLESS_CHROME_ARGS],
+    executablePath: await chromium.executablePath(),
+    headless: true,
+  });
+}
+
 async function launchPdfBrowser(): Promise<Browser> {
   const configuredExecutable = process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
 
   if (isServerlessRuntime()) {
-    const [chromium, puppeteer] = await Promise.all([
+    const [chromiumModule, puppeteer] = await Promise.all([
       import("@sparticuz/chromium"),
       loadPuppeteerCore(),
     ]);
-    return await puppeteer.launch({
-      args: [...chromium.default.args, ...SERVERLESS_CHROME_ARGS],
-      executablePath: await chromium.default.executablePath(),
-      headless: "shell",
-    });
+    return launchServerlessBrowser(chromiumModule.default, puppeteer);
   }
 
   if (configuredExecutable) {
@@ -170,13 +184,9 @@ async function launchPdfBrowser(): Promise<Browser> {
     });
   } catch (bundledChromeError) {
     const puppeteer = await loadPuppeteerCore();
-    const chromium = await import("@sparticuz/chromium");
+    const chromiumModule = await import("@sparticuz/chromium");
     try {
-      return await puppeteer.launch({
-        args: [...chromium.default.args, ...SERVERLESS_CHROME_ARGS],
-        executablePath: await chromium.default.executablePath(),
-        headless: "shell",
-      });
+      return launchServerlessBrowser(chromiumModule.default, puppeteer);
     } catch {
       throw bundledChromeError;
     }
@@ -216,14 +226,17 @@ export async function generateTicketPdfBuffer(input: TicketPdfInput): Promise<Bu
   }
 }
 
-/** Prefer a stored Cloudinary PDF; fall back to on-demand generation. */
+/** Prefer a stored Cloudinary PDF; regenerate, upload, and return when missing or stale. */
 export async function resolveCrewTicketPdfBuffer(args: {
   storedPdfUrl?: string;
   generate?: TicketPdfInput;
-}): Promise<Buffer> {
+  /** When set, freshly generated PDFs are uploaded and this URL is returned for DB persistence. */
+  persistTicketId?: string;
+}): Promise<TicketPdfResolveResult> {
   if (args.storedPdfUrl) {
     try {
-      return await fetchCloudinaryAssetBuffer(args.storedPdfUrl);
+      const buffer = await fetchCloudinaryAssetBuffer(args.storedPdfUrl);
+      return { buffer };
     } catch (storedPdfError) {
       if (!args.generate) {
         throw storedPdfError;
@@ -235,7 +248,22 @@ export async function resolveCrewTicketPdfBuffer(args: {
     throw new Error("No ticket PDF is available for this booking.");
   }
 
-  return generateTicketPdfBuffer(args.generate);
+  const buffer = await generateTicketPdfBuffer(args.generate);
+  if (!args.persistTicketId) {
+    return { buffer };
+  }
+
+  try {
+    const uploadedPdfUrl = await uploadPdfBuffer(
+      buffer,
+      `crew-ticket-${args.persistTicketId}-${Date.now()}`
+    );
+    return { buffer, uploadedPdfUrl };
+  } catch (uploadError) {
+    // eslint-disable-next-line no-console
+    console.error("Failed to upload regenerated ticket PDF:", uploadError);
+    return { buffer };
+  }
 }
 
 async function uploadPdfBuffer(buffer: Buffer, publicId: string): Promise<string> {
@@ -246,6 +274,7 @@ async function uploadPdfBuffer(buffer: Buffer, publicId: string): Promise<string
     public_id: publicId,
     resource_type: "raw",
     type: "upload",
+    access_mode: "public",
     format: "pdf",
   });
 
