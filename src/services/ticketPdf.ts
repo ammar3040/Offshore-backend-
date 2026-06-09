@@ -15,9 +15,12 @@ const SERVERLESS_CHROME_ARGS = ["--no-sandbox", "--disable-setuid-sandbox"];
  * MJML lays out columns with `@media only screen` rules, but Puppeteer PDF defaults
  * to print media — columns then stay at inline `width:100%` and stack vertically.
  */
+/** A4 page height at 96dpi — used to fit content on a single page. */
+const A4_HEIGHT_PX = 1123;
+
 const PDF_LAYOUT_STYLES = `
   @page { margin: 0; size: A4; }
-  html, body {
+  html, body.ticket-pdf {
     margin: 0 !important;
     padding: 0 !important;
     -webkit-print-color-adjust: exact !important;
@@ -47,14 +50,62 @@ const PDF_LAYOUT_STYLES = `
   .mj-column-per-50 { width: 50% !important; max-width: 50% !important; }
   .mj-column-per-25 { width: 25% !important; max-width: 25% !important; }
   .mj-column-per-100 { width: 100% !important; max-width: 100% !important; }
+  body.ticket-pdf .label { font-size: 8px !important; letter-spacing: 0.5px !important; }
+  body.ticket-pdf .value { font-size: 11px !important; }
+  body.ticket-pdf .iata { font-size: 22px !important; line-height: 1.1 !important; }
+  body.ticket-pdf .time { font-size: 16px !important; line-height: 1.1 !important; }
+  body.ticket-pdf .flight-code { font-size: 12px !important; }
+  body.ticket-pdf .flight-hdr-label { font-size: 8px !important; }
+  body.ticket-pdf .detail-strip,
+  body.ticket-pdf .layover-text { font-size: 9px !important; }
+  body.ticket-pdf span[style*="font-size:28px"] { font-size: 22px !important; }
+  body.ticket-pdf span[style*="font-size:22px"] { font-size: 17px !important; }
+  body.ticket-pdf span[style*="font-size:16px"] { font-size: 13px !important; }
+  body.ticket-pdf span[style*="font-size:14px"] { font-size: 11px !important; }
+  body.ticket-pdf span[style*="font-size:12px"] { font-size: 10px !important; }
+  body.ticket-pdf span[style*="font-size:11px"] { font-size: 9px !important; }
+  body.ticket-pdf span[style*="font-size:10px"] { font-size: 8px !important; }
+  body.ticket-pdf td[style*="padding:24px"] { padding: 12px 24px 10px !important; }
+  body.ticket-pdf td[style*="padding:16px 30px 14px"] { padding: 8px 24px 6px !important; }
+  body.ticket-pdf td[style*="padding:12px 30px"] { padding: 6px 24px !important; }
+  body.ticket-pdf td[style*="padding:16px 30px 8px"] { padding: 8px 24px 4px !important; }
+  body.ticket-pdf td[style*="padding:10px 30px"] { padding: 5px 24px !important; }
+  body.ticket-pdf td[style*="padding:8px 30px"] { padding: 4px 24px !important; }
+  body.ticket-pdf td[style*="padding:18px 30px 16px"] { padding: 8px 24px 6px !important; }
+  body.ticket-pdf td[style*="padding:8px 0"] { padding: 0 !important; }
+  body.ticket-pdf .ticket-pdf-spacer,
+  body.ticket-pdf .ticket-pdf-pdf-link { display: none !important; }
 `;
 
 function prepareTicketHtmlForPdf(html: string): string {
+  let pdfHtml = html.replace(
+    /<body([^>]*)>/i,
+    '<body class="ticket-pdf"$1>'
+  );
+  // Drop vertical spacer bands and the empty PDF-download row (email-only).
+  pdfHtml = pdfHtml.replace(
+    /<div[^>]*background-color:#EAEEF4[^>]*>\s*<table[\s\S]*?padding:8px 0[\s\S]*?<\/div>/gi,
+    '<div class="ticket-pdf-spacer"></div>'
+  );
+  pdfHtml = pdfHtml.replace(
+    /<div[^>]*background-color:#EAEEF4[^>]*>\s*<table[\s\S]*?padding:0 30px 12px[\s\S]*?<\/div>/gi,
+    '<div class="ticket-pdf-pdf-link"></div>'
+  );
+
   const styleTag = `<style id="ticket-pdf-layout">${PDF_LAYOUT_STYLES}</style>`;
-  if (html.includes("</head>")) {
-    return html.replace("</head>", `${styleTag}</head>`);
+  if (pdfHtml.includes("</head>")) {
+    return pdfHtml.replace("</head>", `${styleTag}</head>`);
   }
-  return `${styleTag}${html}`;
+  return `${styleTag}${pdfHtml}`;
+}
+
+async function resolveSinglePagePdfScale(page: Awaited<ReturnType<Browser["newPage"]>>): Promise<number> {
+  const contentHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+  if (contentHeight <= A4_HEIGHT_PX) {
+    return 1;
+  }
+  // Leave a small buffer so footers never clip onto page 2.
+  return Math.min(0.95, (A4_HEIGHT_PX - 8) / contentHeight);
 }
 
 function isServerlessRuntime(): boolean {
@@ -140,11 +191,14 @@ export async function generateTicketPdfBuffer(input: TicketPdfInput): Promise<Bu
 
   try {
     const page = await browser.newPage();
+    await page.setViewport({ width: 794, height: A4_HEIGHT_PX });
     await page.setContent(html, { waitUntil: "load" });
     await page.emulateMediaType("screen");
+    const scale = await resolveSinglePagePdfScale(page);
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,
+      scale,
       margin: {
         top: "0px",
         right: "0px",
