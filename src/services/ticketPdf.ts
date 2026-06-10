@@ -138,6 +138,15 @@ async function loadFullPuppeteer() {
   return importer("puppeteer");
 }
 
+/** Avoid TS compiling dynamic import() to require() — @sparticuz/chromium is ESM-only. */
+async function loadSparticuzChromium() {
+  const importer = new Function("specifier", "return import(specifier)") as (
+    specifier: string
+  ) => Promise<typeof import("@sparticuz/chromium")>;
+  const chromiumModule = await importer("@sparticuz/chromium");
+  return chromiumModule.default;
+}
+
 export type TicketPdfResolveResult = {
   buffer: Buffer;
   /** Set when a fresh PDF was generated and uploaded to Cloudinary. */
@@ -160,11 +169,11 @@ async function launchPdfBrowser(): Promise<Browser> {
   const configuredExecutable = process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
 
   if (isServerlessRuntime()) {
-    const [chromiumModule, puppeteer] = await Promise.all([
-      import("@sparticuz/chromium"),
+    const [chromium, puppeteer] = await Promise.all([
+      loadSparticuzChromium(),
       loadPuppeteerCore(),
     ]);
-    return launchServerlessBrowser(chromiumModule.default, puppeteer);
+    return launchServerlessBrowser(chromium, puppeteer);
   }
 
   if (configuredExecutable) {
@@ -184,9 +193,9 @@ async function launchPdfBrowser(): Promise<Browser> {
     });
   } catch (bundledChromeError) {
     const puppeteer = await loadPuppeteerCore();
-    const chromiumModule = await import("@sparticuz/chromium");
+    const chromium = await loadSparticuzChromium();
     try {
-      return launchServerlessBrowser(chromiumModule.default, puppeteer);
+      return launchServerlessBrowser(chromium, puppeteer);
     } catch {
       throw bundledChromeError;
     }
