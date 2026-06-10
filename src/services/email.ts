@@ -131,6 +131,59 @@ function formatLayover(startIso?: string, endIso?: string): string | null {
   return `${hours}h ${remaining.toString().padStart(2, "0")}m`;
 }
 
+function sectorDuration(
+  seg: FlightItinerarySegment,
+  leg: FlightLeg,
+  segmentCount: number
+): string {
+  const depIso = seg.departureTime || leg.departureTime;
+  const arrIso = seg.arrivalTime || leg.arrivalTime;
+  const fromTimes = formatLayover(depIso, arrIso);
+  if (fromTimes) return fromTimes;
+  if (segmentCount === 1 && leg.duration) return leg.duration;
+  return "—";
+}
+
+function buildJourneySummaryTable(
+  flattened: Array<{ seg: FlightItinerarySegment; leg: FlightLeg }>
+): string {
+  if (flattened.length === 0) return "";
+
+  const first = flattened[0];
+  const last = flattened[flattened.length - 1];
+  const firstDepIso = first.seg.departureTime || first.leg.departureTime;
+  const lastArrIso = last.seg.arrivalTime || last.leg.arrivalTime;
+  const origin = first.seg.from || first.leg.from || "—";
+  const destination = last.seg.to || last.leg.to || "—";
+  const dep = formatFlightDateTime(firstDepIso);
+  const arr = formatFlightDateTime(lastArrIso);
+  const totalTravelTime = formatLayover(firstDepIso, lastArrIso) || "—";
+  const totalFlightMinutes = flattened.reduce((sum, { seg, leg }) => {
+    const depIso = seg.departureTime || leg.departureTime;
+    const arrIso = seg.arrivalTime || leg.arrivalTime;
+    if (!depIso || !arrIso) return sum;
+    const start = new Date(depIso);
+    const end = new Date(arrIso);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return sum;
+    return sum + Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
+  }, 0);
+  const totalDuration =
+    totalFlightMinutes > 0
+      ? `${Math.floor(totalFlightMinutes / 60)}h ${(totalFlightMinutes % 60).toString().padStart(2, "0")}m`
+      : "—";
+
+  return `
+      <h3 style="margin:18px 0 8px;">Journey Summary</h3>
+      <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 16px;width:100%;max-width:720px;">
+        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Journey</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(origin)} &rarr; ${escapeHtml(destination)}</td></tr>
+        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Date</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(dep.date)}</td></tr>
+        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Initial Departure</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(dep.date)} ${escapeHtml(dep.time)}</td></tr>
+        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Final Arrival</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(arr.date)} ${escapeHtml(arr.time)}</td></tr>
+        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Total Travel Time</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(totalTravelTime)}</td></tr>
+        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Total Duration</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(totalDuration)}</td></tr>
+      </table>`;
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -482,11 +535,11 @@ export async function sendAdminInvoiceEmail(args: {
 export async function sendTicketApprovalRequestEmail(args: {
   ticketId: string;
   crewName: string;
+  crewEmail?: string;
+  crewPhone?: string;
   projectTitle: string;
   vesselName?: string;
   flight: FlightTicketData;
-  currency: string;
-  price: number;
   passportNumber?: string;
   passportDocumentUrl?: string;
 }): Promise<void> {
@@ -495,16 +548,28 @@ export async function sendTicketApprovalRequestEmail(args: {
   const rows = flattened.map(({ seg, leg }, idx) => {
     const dep = formatFlightDateTime(seg.departureTime || leg.departureTime);
     const arr = formatFlightDateTime(seg.arrivalTime || leg.arrivalTime);
+    const fromCode = seg.from || leg.from || "—";
+    const toCode = seg.to || leg.to || "—";
+    const duration = sectorDuration(seg, leg, flattened.length);
+    const depArr = `${escapeHtml(dep.date)} ${escapeHtml(dep.time)} &rarr; ${escapeHtml(arr.date)} ${escapeHtml(arr.time)}`;
     return `
       <tr>
         <td style="padding:8px;border:1px solid #e5e7eb;">${idx + 1}</td>
         <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(flightCode(seg, leg, args.flight))}</td>
-        <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(seg.from || leg.from || "—")} -> ${escapeHtml(seg.to || leg.to || "—")}</td>
-        <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(dep.date)} ${escapeHtml(dep.time)}</td>
-        <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(arr.date)} ${escapeHtml(arr.time)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(fromCode)} &rarr; ${escapeHtml(toCode)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(fromCode)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(toCode)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;">${depArr}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(duration)}</td>
       </tr>`;
   }).join("");
 
+  const crewEmailRow = args.crewEmail
+    ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Crew Email</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.crewEmail)}</td></tr>`
+    : "";
+  const crewPhoneRow = args.crewPhone
+    ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Crew Phone</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.crewPhone)}</td></tr>`
+    : "";
   const passportRow = args.passportNumber
     ? `<tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Passport Number</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.passportNumber)}</td></tr>`
     : "";
@@ -540,29 +605,33 @@ export async function sendTicketApprovalRequestEmail(args: {
       ${passportAttachmentNote}
       <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:16px 0;width:100%;max-width:720px;">
         <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Ticket ID</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.ticketId)}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Status</td><td style="padding:8px;border:1px solid #e5e7eb;">UNAPPROVED</td></tr>
         <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Crew</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.crewName)}</td></tr>
+        ${crewEmailRow}
+        ${crewPhoneRow}
         ${passportRow}
         <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Project</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.projectTitle)}</td></tr>
         <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Vessel</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.vesselName || "—")}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Fare</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(args.currency)} ${args.price}</td></tr>
       </table>
       <h3 style="margin:18px 0 8px;">Flight Details</h3>
-      <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:900px;">
+      <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:1100px;">
         <tr style="background:#f3f4f6;">
-          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">#</th>
+          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Sector</th>
           <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Flight</th>
           <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Route</th>
-          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Departure</th>
-          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Arrival</th>
+          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">From</th>
+          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">To</th>
+          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Departure / Arrival</th>
+          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Duration</th>
         </tr>
-        ${rows || `<tr><td colspan="5" style="padding:8px;border:1px solid #e5e7eb;">No flight details available.</td></tr>`}
+        ${rows || `<tr><td colspan="7" style="padding:8px;border:1px solid #e5e7eb;">No flight details available.</td></tr>`}
       </table>
+      ${buildJourneySummaryTable(flattened)}
     </div>`;
 
   await transporter.sendMail({
     from,
-    to: "pranavmishraok@gmail.com",
+    // to: "pranavmishraok@gmail.com",
+    to: "vishwajeetbharadiya12@gmail.com",
     cc: "capriway.travel@gmail.com",
     subject: `Crew Ticket Approval Required - ${args.crewName}`,
     html,
