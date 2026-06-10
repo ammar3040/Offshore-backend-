@@ -172,15 +172,28 @@ function buildJourneySummaryTable(
       ? `${Math.floor(totalFlightMinutes / 60)}h ${(totalFlightMinutes % 60).toString().padStart(2, "0")}m`
       : "—";
 
+  const initialDeparture = `${escapeHtml(dep.date)} ${escapeHtml(dep.time)}`;
+  const finalArrival = `${escapeHtml(arr.date)} ${escapeHtml(arr.time)}`;
+
   return `
       <h3 style="margin:18px 0 8px;">Journey Summary</h3>
-      <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 16px;width:100%;max-width:720px;">
-        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Journey</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(origin)} &rarr; ${escapeHtml(destination)}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Date</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(dep.date)}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Initial Departure</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(dep.date)} ${escapeHtml(dep.time)}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Final Arrival</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(arr.date)} ${escapeHtml(arr.time)}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Total Travel Time</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(totalTravelTime)}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #e5e7eb;font-weight:bold;">Total Duration</td><td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(totalDuration)}</td></tr>
+      <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 16px;width:100%;max-width:1100px;">
+        <tr style="background:#f3f4f6;">
+          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Journey</th>
+          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Date</th>
+          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Initial Departure</th>
+          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Final Arrival</th>
+          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Total Travel Time</th>
+          <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">Total Duration</th>
+        </tr>
+        <tr>
+          <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(origin)} &rarr; ${escapeHtml(destination)}</td>
+          <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(dep.date)}</td>
+          <td style="padding:8px;border:1px solid #e5e7eb;">${initialDeparture}</td>
+          <td style="padding:8px;border:1px solid #e5e7eb;">${finalArrival}</td>
+          <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(totalTravelTime)}</td>
+          <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(totalDuration)}</td>
+        </tr>
       </table>`;
 }
 
@@ -630,8 +643,8 @@ export async function sendTicketApprovalRequestEmail(args: {
 
   await transporter.sendMail({
     from,
-    // to: "pranavmishraok@gmail.com",
-    to: "vishwajeetbharadiya12@gmail.com",
+    to: "pranavmishraok@gmail.com",
+    // to: "vishwajeetbharadiya12@gmail.com",
     cc: "capriway.travel@gmail.com",
     subject: `Crew Ticket Approval Required - ${args.crewName}`,
     html,
