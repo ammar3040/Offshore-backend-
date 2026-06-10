@@ -1,6 +1,8 @@
 import type { Browser } from "puppeteer-core";
+import path from "path";
 import cloudinary, { CLOUDINARY_CREW_TICKET_FOLDER } from "../config/cloudinary";
 import { fetchCloudinaryAssetBuffer } from "../lib/cloudinary-asset";
+import "../lib/trace-serverless-pdf-deps";
 import { renderFlightTicketHtml, type FlightTicketData, type FlightTicketRenderOptions } from "./email";
 
 export type TicketPdfInput = {
@@ -158,9 +160,16 @@ async function launchServerlessBrowser(
   puppeteer: typeof import("puppeteer-core")
 ): Promise<Browser> {
   chromium.setGraphicsMode = false;
+  const binDir = path.join(process.cwd(), "node_modules/@sparticuz/chromium/bin");
+  let executablePath: string;
+  try {
+    executablePath = await chromium.executablePath(binDir);
+  } catch {
+    executablePath = await chromium.executablePath();
+  }
   return puppeteer.launch({
     args: [...chromium.args, ...SERVERLESS_CHROME_ARGS],
-    executablePath: await chromium.executablePath(),
+    executablePath,
     headless: true,
   });
 }
