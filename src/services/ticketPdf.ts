@@ -3,6 +3,7 @@ import path from "path";
 import cloudinary, { CLOUDINARY_CREW_TICKET_FOLDER } from "../config/cloudinary";
 import { fetchCloudinaryAssetBuffer } from "../lib/cloudinary-asset";
 import "../lib/trace-serverless-pdf-deps";
+import { updateCrewTicketPdfUrl } from "../models/crewTicket.model";
 import { renderFlightTicketHtml, type FlightTicketData, type FlightTicketRenderOptions } from "./email";
 
 export type TicketPdfInput = {
@@ -271,38 +272,45 @@ export async function resolveCrewTicketPdfBuffer(args: {
     return { buffer };
   }
 
-  try {
-    const uploadedPdfUrl = await uploadPdfBuffer(
-      buffer,
-      `crew-ticket-${args.persistTicketId}-${Date.now()}`
-    );
-    return { buffer, uploadedPdfUrl };
-  } catch (uploadError) {
-    // eslint-disable-next-line no-console
-    console.error("Failed to upload regenerated ticket PDF:", uploadError);
-    return { buffer };
-  }
+  const uploadedPdfUrl = await uploadAndPersistCrewTicketPdf(args.persistTicketId, buffer);
+  return { buffer, uploadedPdfUrl };
 }
 
-async function uploadPdfBuffer(buffer: Buffer, publicId: string): Promise<string> {
+async function uploadPdfBuffer(buffer: Buffer, ticketId: string): Promise<string> {
   ensureCloudinaryConfigured();
   const dataUri = `data:application/pdf;base64,${buffer.toString("base64")}`;
   const result = await cloudinary.uploader.upload(dataUri, {
     folder: CLOUDINARY_CREW_TICKET_FOLDER,
-    public_id: publicId,
+    public_id: `crew-ticket-${ticketId}`,
     resource_type: "raw",
     type: "upload",
     access_mode: "public",
     format: "pdf",
+    overwrite: true,
+    invalidate: true,
   });
 
-  if (!result?.secure_url) {
+  const pdfUrl = result?.secure_url ?? result?.url;
+  if (!pdfUrl) {
     throw new Error("Cloudinary did not return a PDF URL.");
   }
-  return result.secure_url;
+  return pdfUrl;
 }
 
-/** Optional Cloudinary archive upload — use authenticated download endpoints for delivery. */
+/** Upload PDF to Cloudinary and save the public URL on the crew ticket. */
+export async function uploadAndPersistCrewTicketPdf(ticketId: string, buffer: Buffer): Promise<string> {
+  const pdfUrl = await uploadPdfBuffer(buffer, ticketId);
+  const ticket = await updateCrewTicketPdfUrl(ticketId, pdfUrl);
+  if (!ticket) {
+    throw new Error(`Crew ticket ${ticketId} not found while saving PDF URL.`);
+  }
+  if (!ticket.pdf) {
+    throw new Error(`PDF URL was not saved on crew ticket ${ticketId}.`);
+  }
+  return ticket.pdf;
+}
+
+/** Generate ticket PDF, upload to Cloudinary, and persist the public URL on the crew ticket. */
 export async function generateAndUploadTicketPdf(args: {
   ticketId: string;
   crewFirstname: string;
@@ -314,5 +322,5 @@ export async function generateAndUploadTicketPdf(args: {
     flight: args.flight,
     renderOptions: args.renderOptions,
   });
-  return uploadPdfBuffer(buffer, `crew-ticket-${args.ticketId}-${Date.now()}`);
+  return uploadAndPersistCrewTicketPdf(args.ticketId, buffer);
 }

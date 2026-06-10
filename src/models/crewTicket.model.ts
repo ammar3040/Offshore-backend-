@@ -371,6 +371,15 @@ export async function updateCrewTicket(
   return doc ? toCrewTicket(doc) : null;
 }
 
+/** Persist the Cloudinary public delivery URL on the crew ticket. */
+export async function updateCrewTicketPdfUrl(id: string, pdfUrl: string): Promise<CrewTicket | null> {
+  const trimmed = pdfUrl.trim();
+  if (!trimmed) {
+    throw new Error("PDF URL is required.");
+  }
+  return updateCrewTicket(id, { pdf: trimmed });
+}
+
 export async function deleteCrewTicket(id: string): Promise<boolean> {
   if (!mongoose.Types.ObjectId.isValid(id)) return false;
   const result = await CrewTicketModel.findByIdAndDelete(id);

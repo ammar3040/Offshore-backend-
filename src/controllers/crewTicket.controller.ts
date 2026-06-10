@@ -13,6 +13,7 @@ import {
   findCrewByCrewId,
   findProjectById,
   updateCrewTicket,
+  updateCrewTicketPdfUrl,
   sumMarkupByProject,
   updateAdminBalance,
   updateAdminCancellationState,
@@ -303,7 +304,7 @@ export async function uploadTicketPdf(
     if (!pdfUrl) {
       return res.status(400).json({ message: "PDF upload failed or no file provided." });
     }
-    const ticket = await updateCrewTicket(id, { pdf: pdfUrl });
+    const ticket = await updateCrewTicketPdfUrl(id, pdfUrl);
     if (!ticket) {
       return res.status(404).json({ message: "Crew ticket not found." });
     }
@@ -752,7 +753,7 @@ export async function approveCrewTicket(
     const { flight: flightData } = buildFlightTicketDataFromCrewTicket(approvedTicket);
     let ticketWithPdf = approvedTicket;
     try {
-      const pdfUrl = await generateAndUploadTicketPdf({
+      await generateAndUploadTicketPdf({
         ticketId: approvedTicket.id,
         crewFirstname: crew.firstname,
         flight: flightData,
@@ -762,9 +763,9 @@ export async function approveCrewTicket(
           vesselName: vesselDisplayName(approvedTicket),
         },
       });
-      const updated = await updateCrewTicket(id, { pdf: pdfUrl });
-      if (updated) {
-        ticketWithPdf = updated;
+      const refreshed = await findCrewTicketById(id);
+      if (refreshed) {
+        ticketWithPdf = refreshed;
       }
     } catch (pdfError) {
       // eslint-disable-next-line no-console
@@ -820,7 +821,7 @@ export async function downloadCrewTicketPdf(
     }
 
     const { flight: flightData } = buildFlightTicketDataFromCrewTicket(ticket);
-    const { buffer: pdfBuffer, uploadedPdfUrl } = await resolveCrewTicketPdfBuffer({
+    const { buffer: pdfBuffer } = await resolveCrewTicketPdfBuffer({
       storedPdfUrl: ticket.pdf,
       persistTicketId: ticket.id,
       generate: {
@@ -833,10 +834,6 @@ export async function downloadCrewTicketPdf(
         },
       },
     });
-
-    if (uploadedPdfUrl) {
-      await updateCrewTicket(ticket.id, { pdf: uploadedPdfUrl });
-    }
 
     const filename = `crew-ticket-${ticket.bookingReference}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
