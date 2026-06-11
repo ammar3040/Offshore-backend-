@@ -1636,7 +1636,15 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
         };
       });
     };
-
+// hrty
+// here
+// here
+// here
+// here
+// here
+// here
+// here
+// here
     const fromData = parseAirport(from);
     const toData = parseAirport(to);
     const sector = from?.COUNTRY === to?.COUNTRY ? "D" : "I";
