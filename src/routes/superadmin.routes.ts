@@ -9,6 +9,7 @@ import {
   streamSuperadminInvoicePdf,
   uploadAdminInvoicePdf,
   upsertMarkup,
+  upsertMarkupPercentage,
 } from "../controllers";
 import { authenticateSuperAdmin } from "../middleware/auth";
 import { adminInvoicePdfUpload } from "../middleware/upload";
@@ -21,16 +22,17 @@ router.get("/analytics", authenticateSuperAdmin, getAnalytics);
 router.get("/admins", authenticateSuperAdmin, getAllAdmins);
 router.post("/admins", authenticateSuperAdmin, createAdminBySuperAdmin);
 router.put("/markup", authenticateSuperAdmin, upsertMarkup);
+router.put("/markup_percentage", authenticateSuperAdmin, upsertMarkupPercentage);
 
 router.get("/admin-invoices", authenticateSuperAdmin, listAdminInvoices);
-router.get("/admin-invoice/:projectId/pdf", authenticateSuperAdmin, streamSuperadminInvoicePdf);
+router.get("/admin-invoice/:ticketId/pdf", authenticateSuperAdmin, streamSuperadminInvoicePdf);
 router.post(
-  "/admin-invoice/:projectId/upload",
+  "/admin-invoice/:ticketId/upload",
   authenticateSuperAdmin,
   adminInvoicePdfUpload,
   uploadAdminInvoicePdfToCloudinary,
   uploadAdminInvoicePdf
 );
-router.post("/admin-invoice/:projectId/send", authenticateSuperAdmin, sendAdminInvoice);
+router.post("/admin-invoice/:ticketId/send", authenticateSuperAdmin, sendAdminInvoice);
 
 export default router;

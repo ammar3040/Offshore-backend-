@@ -126,6 +126,7 @@ export async function getAnalytics(req: AuthenticatedRequest, res: Response) {
       totalCrew,
       totalTickets,
       markup: superAdmin?.markup ?? null,
+      markupPercentage: superAdmin?.markupPercentage ?? null,
       cashback: superAdmin?.cashback ?? null,
       cancellationCharges: superAdmin?.cancellationCharges ?? null,
       adminsByActivity,
@@ -244,6 +245,51 @@ export async function upsertMarkup(req: AuthenticatedRequest, res: Response) {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error updating markup/cashback:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+/** Add/upsert percentage markup for the authenticated superadmin */
+export async function upsertMarkupPercentage(req: AuthenticatedRequest, res: Response) {
+  try {
+    const raw =
+      req.body.markup_percentage ??
+      req.body.markupPercentage;
+
+    if (raw === undefined) {
+      return res.status(400).json({ message: "markup_percentage is required." });
+    }
+
+    let markupPercentage: number | null;
+    if (raw === null) {
+      markupPercentage = null;
+    } else {
+      markupPercentage = typeof raw === "string" ? parseFloat(raw) : Number(raw);
+      if (typeof markupPercentage !== "number" || isNaN(markupPercentage)) {
+        return res.status(400).json({ message: "markup_percentage must be a valid number or null." });
+      }
+      if (markupPercentage < 0) {
+        return res.status(400).json({ message: "markup_percentage must be >= 0." });
+      }
+    }
+
+    const superAdminId = req.user?.userId;
+    if (!superAdminId) {
+      return res.status(401).json({ message: "Unauthorized." });
+    }
+
+    const superAdmin = await updateSuperAdminMarkup(superAdminId, { markupPercentage });
+    if (!superAdmin) {
+      return res.status(404).json({ message: "SuperAdmin not found." });
+    }
+
+    return res.status(200).json({
+      message: "Updated successfully.",
+      superAdmin,
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error updating markup percentage:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }

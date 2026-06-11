@@ -1571,6 +1571,8 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
         rates
       );
       const superAdminMarkupRaw = superAdmin?.markup ?? adminSettings.pricing.flatMarkup ?? 0;
+      const markupPercentageRaw =
+        superAdmin?.markupPercentage ?? adminSettings.pricing.percentageMarkup ?? 0;
       const localSuperAdminMarkup = convert(
         superAdminMarkupRaw,
         baseCurrency as CurrencyCode,
@@ -1602,14 +1604,20 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
 
         const updatedFares = flight.fares.map((fare: any) => {
           const riyaPriceConverted = convert(fare.totalFare, originalCurrency, requestedCurrency, rates);
+          const percentageMarkupAmount =
+            markupPercentageRaw > 0 ? (riyaPriceConverted * markupPercentageRaw) / 100 : 0;
           const price = Math.round(
-            Math.max(0, riyaPriceConverted + localSuperAdminMarkup + localCancellationSurcharge)
+            Math.max(
+              0,
+              riyaPriceConverted + percentageMarkupAmount + localSuperAdminMarkup + localCancellationSurcharge
+            )
           );
           const markup = Math.round(localSuperAdminMarkup);
           return {
             ...fare,
             price,
             markup,
+            percentageMarkup: Math.round(percentageMarkupAmount),
             totalFare: price,
             cancellationSurcharge: Math.round(localCancellationSurcharge),
           };
@@ -1741,6 +1749,7 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
               ...f,
               price: (f.price ?? 0) + (rFare.price ?? 0),
               markup: (f.markup ?? 0) + (rFare.markup ?? 0),
+              percentageMarkup: (f.percentageMarkup ?? 0) + (rFare.percentageMarkup ?? 0),
               totalFare: f.totalFare + rFare.totalFare,
               basicFare: f.basicFare + rFare.basicFare,
             };

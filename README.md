@@ -44,9 +44,10 @@ If the proxy points at the deployed Vercel URL before new routes are released, s
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/superadmin/admin-invoices` | List stored invoices |
-| `POST` | `/superadmin/admin-invoice/:projectId/upload` | `multipart/form-data`, field `pdf`, optional `margin` |
-| `POST` | `/superadmin/admin-invoice/:projectId/send` | JSON `{ margin?, invoiceNumber? }` |
+| `GET` | `/superadmin/admin-invoices` | List stored invoices (one per approved crew ticket) |
+| `POST` | `/superadmin/admin-invoice/:ticketId/upload` | `multipart/form-data`, field `pdf`, optional `margin` |
+| `POST` | `/superadmin/admin-invoice/:ticketId/send` | JSON `{ margin?, invoiceNumber? }` |
+| `GET` | `/superadmin/admin-invoice/:ticketId/pdf` | Stream stored invoice PDF |
 
 All require `Authorization: Bearer <superadmin_token>`.
 
@@ -55,6 +56,7 @@ All require `Authorization: Bearer <superadmin_token>`.
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/admin/admin-invoices` | Invoices (with PDF URLs) for projects owned by the logged-in admin |
+| `GET` | `/admin/admin-invoice/:ticketId/pdf` | Stream invoice PDF for an owned ticket |
 
-Requires `Authorization: Bearer <admin_token>`. Response: `{ "adminInvoices": [...] }` (includes optional `projectTitle` per row).
+Requires `Authorization: Bearer <admin_token>`. Response: `{ "adminInvoices": [...] }` (includes `ticketId`, `projectId`, optional `passengerName` and `projectTitle` per row).
 

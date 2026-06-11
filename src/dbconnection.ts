@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { ensureAdminInvoiceIndexes } from "./models/adminInvoice.model";
 import { ensureCrewTicketIndexes } from "./models/crewTicket.model";
 
 // const DEFAULT_URI = "mongodb://127.0.0.1:27017/marine-flight-backend";
@@ -18,6 +19,7 @@ export async function connectDB(): Promise<void> {
     // eslint-disable-next-line no-console
     console.log("Connected to MongoDB");
     await ensureCrewTicketIndexes();
+    await ensureAdminInvoiceIndexes();
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Failed to connect to MongoDB:", error);

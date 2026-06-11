@@ -4,19 +4,26 @@ import mongoose from "mongoose";
 import {
   AdminInvoiceStatus,
   findAdminById,
-  findAdminInvoiceByProjectId,
+  findAdminInvoiceByTicketId,
   findAdminInvoicesByAdminId,
   findAllAdminInvoices,
+  findCrewByCrewId,
   findProjectById,
   findProjectTitlesByIds,
-  sumApprovedTicketPriceByProject,
-  upsertAdminInvoiceByProjectId,
+  upsertAdminInvoiceByTicketId,
 } from "../models";
+import { CrewTicketStatus, findCrewTicketById } from "../models/crewTicket.model";
+import type { CrewTicket } from "../models/crewTicket.model";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import { fetchCloudinaryAssetBuffer, getSignedCloudinaryDeliveryUrl } from "../lib/cloudinary-asset";
-import { ACCESS_DENIED_MESSAGE, projectOwnedByCaller } from "../lib/resource-access";
+import { ACCESS_DENIED_MESSAGE, ticketAccessibleByCaller } from "../lib/resource-access";
 import { sendAdminInvoiceEmail } from "../services/email";
 import type { AdminInvoice } from "../models/adminInvoice.model";
+
+type AdminInvoiceResponse = AdminInvoice & {
+  passengerName?: string;
+  projectTitle?: string;
+};
 
 /** Parse an optional margin coming from a form field (string) or JSON body (number). */
 function parseMargin(raw: unknown): { ok: true; value: number | undefined } | { ok: false } {
@@ -28,6 +35,52 @@ function parseMargin(raw: unknown): { ok: true; value: number | undefined } | { 
     return { ok: false };
   }
   return { ok: true, value: Math.round(value * 100) / 100 };
+}
+
+function resolveObjectIdString(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof mongoose.Types.ObjectId) return value.toString();
+  if (typeof value === "object" && value !== null) {
+    if ("_id" in value && value._id instanceof mongoose.Types.ObjectId) {
+      return value._id.toString();
+    }
+    if ("id" in value && typeof (value as { id?: unknown }).id === "string") {
+      return (value as { id: string }).id;
+    }
+  }
+  if (typeof value === "string") return value;
+  return null;
+}
+
+function resolveProjectIdFromTicket(ticket: CrewTicket): string | null {
+  return resolveObjectIdString(ticket.project_id as mongoose.Types.ObjectId | undefined);
+}
+
+function resolveCrewIdFromTicket(ticket: CrewTicket): string | null {
+  return resolveObjectIdString(ticket.crew_id as mongoose.Types.ObjectId | undefined);
+}
+
+function passengerNameFromTicket(ticket: CrewTicket): string | undefined {
+  const crew = ticket.crew_id;
+  if (crew && typeof crew === "object" && "firstname" in crew) {
+    const populated = crew as { firstname?: string; lastname?: string };
+    const name = [populated.firstname, populated.lastname].filter(Boolean).join(" ").trim();
+    return name || undefined;
+  }
+  return undefined;
+}
+
+async function resolvePassengerName(ticket: CrewTicket): Promise<string | undefined> {
+  const fromPopulate = passengerNameFromTicket(ticket);
+  if (fromPopulate) return fromPopulate;
+
+  const crewId = resolveCrewIdFromTicket(ticket);
+  if (!crewId) return undefined;
+
+  const crew = await findCrewByCrewId(crewId);
+  if (!crew) return undefined;
+  const name = [crew.firstname, crew.lastname].filter(Boolean).join(" ").trim();
+  return name || undefined;
 }
 
 /** Resolve the owning admin (project.createdBy) into { id, email, name }. */
@@ -71,15 +124,65 @@ function withSignedPdfUrl<T extends AdminInvoice>(invoice: T): T {
   return signed ? { ...invoice, pdf: signed } : invoice;
 }
 
-function invoicePdfFilename(invoice: AdminInvoice, projectId: string): string {
-  return invoice.invoiceNumber ? `${invoice.invoiceNumber}.pdf` : `invoice-${projectId}.pdf`;
+function invoicePdfFilename(invoice: AdminInvoice, ticketId: string): string {
+  return invoice.invoiceNumber ? `${invoice.invoiceNumber}.pdf` : `invoice-${ticketId}.pdf`;
+}
+
+async function enrichInvoicesWithPassengerNames(
+  invoices: AdminInvoice[]
+): Promise<AdminInvoiceResponse[]> {
+  const enriched = await Promise.all(
+    invoices.map(async (invoice) => {
+      const ticket = await findCrewTicketById(invoice.ticketId);
+      const passengerName = ticket ? await resolvePassengerName(ticket) : undefined;
+      return { ...invoice, passengerName };
+    })
+  );
+  return enriched;
+}
+
+async function loadTicketForInvoice(
+  ticketId: string
+): Promise<
+  | { ok: true; ticket: CrewTicket; projectId: string; project: NonNullable<Awaited<ReturnType<typeof findProjectById>>> }
+  | { ok: false; status: number; message: string }
+> {
+  if (!mongoose.Types.ObjectId.isValid(ticketId)) {
+    return { ok: false, status: 400, message: "Invalid ticket id." };
+  }
+
+  const ticket = await findCrewTicketById(ticketId);
+  if (!ticket) {
+    return { ok: false, status: 404, message: "Ticket not found." };
+  }
+
+  if (ticket.status !== CrewTicketStatus.Approved) {
+    return { ok: false, status: 400, message: "Only approved tickets can be invoiced." };
+  }
+
+  const projectId = resolveProjectIdFromTicket(ticket);
+  if (!projectId) {
+    return { ok: false, status: 400, message: "Ticket is not linked to a project." };
+  }
+
+  const project = await findProjectById(projectId);
+  if (!project) {
+    return { ok: false, status: 404, message: "Project not found." };
+  }
+
+  return { ok: true, ticket, projectId, project };
+}
+
+function ticketSubtotal(ticket: CrewTicket): number {
+  return typeof ticket.price === "number" ? ticket.price : 0;
 }
 
 /** GET /superadmin/admin-invoices — list all stored invoices. */
 export async function listAdminInvoices(_req: AuthenticatedRequest, res: Response) {
   try {
     const adminInvoices = await findAllAdminInvoices();
-    return res.json({ adminInvoices: adminInvoices.map(withSignedPdfUrl) });
+    const enriched = await enrichInvoicesWithPassengerNames(adminInvoices);
+    return res.json({ adminInvoices: enriched.map(withSignedPdfUrl) });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error listing admin invoices:", error);
@@ -97,8 +200,9 @@ export async function listAdminPanelInvoices(req: AuthenticatedRequest, res: Res
 
     const invoices = await findAdminInvoicesByAdminId(adminId, { requirePdf: true });
     const projectTitles = await findProjectTitlesByIds(invoices.map((invoice) => invoice.projectId));
+    const enriched = await enrichInvoicesWithPassengerNames(invoices);
 
-    const adminInvoices = invoices.map((invoice) =>
+    const adminInvoices = enriched.map((invoice) =>
       withSignedPdfUrl({
         ...invoice,
         projectTitle: projectTitles.get(invoice.projectId) ?? undefined,
@@ -113,21 +217,19 @@ export async function listAdminPanelInvoices(req: AuthenticatedRequest, res: Res
   }
 }
 
-/** POST /superadmin/admin-invoice/:projectId/upload — store PDF + upsert invoice (status GENERATED). */
+/** POST /superadmin/admin-invoice/:ticketId/upload — store PDF + upsert invoice (status GENERATED). */
 export async function uploadAdminInvoicePdf(
-  req: AuthenticatedRequest & Request<{ projectId: string }> & { uploadedPdfUrl?: string },
+  req: AuthenticatedRequest & Request<{ ticketId: string }> & { uploadedPdfUrl?: string },
   res: Response
 ) {
   try {
-    const { projectId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(projectId)) {
-      return res.status(400).json({ message: "Invalid project id." });
+    const { ticketId } = req.params;
+    const loaded = await loadTicketForInvoice(ticketId);
+    if (!loaded.ok) {
+      return res.status(loaded.status).json({ message: loaded.message });
     }
 
-    const project = await findProjectById(projectId);
-    if (!project) {
-      return res.status(404).json({ message: "Project not found." });
-    }
+    const { ticket, projectId } = loaded;
 
     const pdfUrl = req.uploadedPdfUrl;
     if (!pdfUrl) {
@@ -139,23 +241,27 @@ export async function uploadAdminInvoicePdf(
       return res.status(400).json({ message: "margin must be a number greater than or equal to 0." });
     }
 
-    const existing = await findAdminInvoiceByProjectId(projectId);
+    const existing = await findAdminInvoiceByTicketId(ticketId);
     const margin =
       marginParsed.value !== undefined ? marginParsed.value : existing?.margin ?? null;
 
-    const subtotal = await sumApprovedTicketPriceByProject(projectId);
+    const subtotal = ticketSubtotal(ticket);
     const total = Math.round((subtotal + (margin ?? 0)) * 100) / 100;
 
-    const adminInvoice = await upsertAdminInvoiceByProjectId(projectId, {
+    const adminInvoice = await upsertAdminInvoiceByTicketId(ticketId, projectId, {
       pdf: pdfUrl,
       margin,
       total,
       status: AdminInvoiceStatus.Generated,
     });
 
+    const passengerName = await resolvePassengerName(ticket);
+
     return res.status(200).json({
       message: "Invoice PDF uploaded.",
-      adminInvoice: adminInvoice ? withSignedPdfUrl(adminInvoice) : adminInvoice,
+      adminInvoice: adminInvoice
+        ? withSignedPdfUrl({ ...adminInvoice, passengerName })
+        : adminInvoice,
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -164,25 +270,23 @@ export async function uploadAdminInvoicePdf(
   }
 }
 
-/** POST /superadmin/admin-invoice/:projectId/send — email the owning admin the stored PDF. */
+/** POST /superadmin/admin-invoice/:ticketId/send — email the owning admin the stored PDF. */
 export async function sendAdminInvoice(
-  req: AuthenticatedRequest & Request<{ projectId: string }>,
+  req: AuthenticatedRequest & Request<{ ticketId: string }>,
   res: Response
 ) {
   try {
-    const { projectId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(projectId)) {
-      return res.status(400).json({ message: "Invalid project id." });
+    const { ticketId } = req.params;
+    const loaded = await loadTicketForInvoice(ticketId);
+    if (!loaded.ok) {
+      return res.status(loaded.status).json({ message: loaded.message });
     }
 
-    const project = await findProjectById(projectId);
-    if (!project) {
-      return res.status(404).json({ message: "Project not found." });
-    }
+    const { ticket, projectId, project } = loaded;
 
-    const existing = await findAdminInvoiceByProjectId(projectId);
+    const existing = await findAdminInvoiceByTicketId(ticketId);
     if (!existing?.pdf) {
-      return res.status(400).json({ message: "No PDF attached for this project." });
+      return res.status(400).json({ message: "No PDF attached for this ticket." });
     }
 
     const body = (req.body ?? {}) as { margin?: unknown; invoiceNumber?: unknown };
@@ -204,7 +308,7 @@ export async function sendAdminInvoice(
       return res.status(404).json({ message: "Could not resolve the admin email for this project." });
     }
 
-    const subtotal = await sumApprovedTicketPriceByProject(projectId);
+    const subtotal = ticketSubtotal(ticket);
     const total = Math.round((subtotal + (margin ?? 0)) * 100) / 100;
 
     try {
@@ -223,7 +327,7 @@ export async function sendAdminInvoice(
       return res.status(500).json({ message: "Failed to send the invoice email." });
     }
 
-    const adminInvoice = await upsertAdminInvoiceByProjectId(projectId, {
+    const adminInvoice = await upsertAdminInvoiceByTicketId(ticketId, projectId, {
       margin,
       invoiceNumber,
       total,
@@ -231,9 +335,13 @@ export async function sendAdminInvoice(
       sentAt: new Date(),
     });
 
+    const passengerName = await resolvePassengerName(ticket);
+
     return res.status(200).json({
       message: "Invoice sent to the admin.",
-      adminInvoice: adminInvoice ? withSignedPdfUrl(adminInvoice) : adminInvoice,
+      adminInvoice: adminInvoice
+        ? withSignedPdfUrl({ ...adminInvoice, passengerName })
+        : adminInvoice,
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -242,9 +350,9 @@ export async function sendAdminInvoice(
   }
 }
 
-/** GET /admin/admin-invoice/:projectId/pdf — stream invoice PDF (admin owns project). */
+/** GET /admin/admin-invoice/:ticketId/pdf — stream invoice PDF (admin owns ticket's project). */
 export async function streamAdminPanelInvoicePdf(
-  req: AuthenticatedRequest & Request<{ projectId: string }>,
+  req: AuthenticatedRequest & Request<{ ticketId: string }>,
   res: Response
 ) {
   try {
@@ -254,27 +362,27 @@ export async function streamAdminPanelInvoicePdf(
       return res.status(401).json({ message: "Authentication required." });
     }
 
-    const { projectId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(projectId)) {
-      return res.status(400).json({ message: "Invalid project id." });
+    const { ticketId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(ticketId)) {
+      return res.status(400).json({ message: "Invalid ticket id." });
     }
 
-    const allowed = await projectOwnedByCaller(projectId, adminId, role);
+    const allowed = await ticketAccessibleByCaller(ticketId, adminId, role);
     if (!allowed) {
-      const project = await findProjectById(projectId);
-      if (!project) {
-        return res.status(404).json({ message: "Project not found." });
+      const ticket = await findCrewTicketById(ticketId);
+      if (!ticket) {
+        return res.status(404).json({ message: "Ticket not found." });
       }
       return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
     }
 
-    const invoice = await findAdminInvoiceByProjectId(projectId);
+    const invoice = await findAdminInvoiceByTicketId(ticketId);
     if (!invoice?.pdf) {
-      return res.status(404).json({ message: "No PDF attached for this project." });
+      return res.status(404).json({ message: "No PDF attached for this ticket." });
     }
 
     const pdfBuffer = await fetchCloudinaryAssetBuffer(invoice.pdf);
-    const filename = invoicePdfFilename(invoice, projectId);
+    const filename = invoicePdfFilename(invoice, ticketId);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
     res.setHeader("Content-Length", pdfBuffer.length);
@@ -286,29 +394,29 @@ export async function streamAdminPanelInvoicePdf(
   }
 }
 
-/** GET /superadmin/admin-invoice/:projectId/pdf — stream invoice PDF (superadmin). */
+/** GET /superadmin/admin-invoice/:ticketId/pdf — stream invoice PDF (superadmin). */
 export async function streamSuperadminInvoicePdf(
-  req: AuthenticatedRequest & Request<{ projectId: string }>,
+  req: AuthenticatedRequest & Request<{ ticketId: string }>,
   res: Response
 ) {
   try {
-    const { projectId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(projectId)) {
-      return res.status(400).json({ message: "Invalid project id." });
+    const { ticketId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(ticketId)) {
+      return res.status(400).json({ message: "Invalid ticket id." });
     }
 
-    const project = await findProjectById(projectId);
-    if (!project) {
-      return res.status(404).json({ message: "Project not found." });
+    const ticket = await findCrewTicketById(ticketId);
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket not found." });
     }
 
-    const invoice = await findAdminInvoiceByProjectId(projectId);
+    const invoice = await findAdminInvoiceByTicketId(ticketId);
     if (!invoice?.pdf) {
-      return res.status(404).json({ message: "No PDF attached for this project." });
+      return res.status(404).json({ message: "No PDF attached for this ticket." });
     }
 
     const pdfBuffer = await fetchCloudinaryAssetBuffer(invoice.pdf);
-    const filename = invoicePdfFilename(invoice, projectId);
+    const filename = invoicePdfFilename(invoice, ticketId);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
     res.setHeader("Content-Length", pdfBuffer.length);

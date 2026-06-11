@@ -9,6 +9,7 @@ export enum AdminInvoiceStatus {
 
 export interface AdminInvoice {
   id: string;
+  ticketId: string;
   projectId: string;
   invoiceNumber: string | null;
   margin: number | null;
@@ -20,22 +21,31 @@ export interface AdminInvoice {
 }
 
 export interface AdminInvoiceDocument
-  extends Omit<AdminInvoice, "id" | "projectId" | "sentAt" | "createdAt">,
+  extends Omit<AdminInvoice, "id" | "ticketId" | "projectId" | "sentAt" | "createdAt">,
     Document {
   _id: mongoose.Types.ObjectId;
+  ticketId: mongoose.Types.ObjectId;
   projectId: mongoose.Types.ObjectId;
   sentAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
+/** Legacy project-level rows lack ticketId and are excluded from API responses. */
+const ticketScopedFilter = { ticketId: { $exists: true, $ne: null } };
+
 const adminInvoiceSchema = new Schema<AdminInvoiceDocument>(
   {
+    ticketId: {
+      type: Schema.Types.ObjectId,
+      ref: "CrewTicket",
+      required: true,
+      unique: true,
+    },
     projectId: {
       type: Schema.Types.ObjectId,
       ref: "Project",
       required: true,
-      unique: true,
     },
     invoiceNumber: { type: String, required: false, default: null },
     margin: { type: Number, required: false, default: null },
@@ -59,6 +69,7 @@ const AdminInvoiceModel: Model<AdminInvoiceDocument> =
 function toAdminInvoice(doc: AdminInvoiceDocument): AdminInvoice {
   return {
     id: doc._id.toString(),
+    ticketId: doc.ticketId.toString(),
     projectId: doc.projectId.toString(),
     invoiceNumber: doc.invoiceNumber ?? null,
     margin: typeof doc.margin === "number" ? doc.margin : null,
@@ -70,8 +81,35 @@ function toAdminInvoice(doc: AdminInvoiceDocument): AdminInvoice {
   };
 }
 
+/** Drop legacy project-level rows and indexes before ticket-scoped unique index sync. */
+export async function ensureAdminInvoiceIndexes(): Promise<void> {
+  const legacyResult = await AdminInvoiceModel.deleteMany({
+    $or: [{ ticketId: { $exists: false } }, { ticketId: null }],
+  });
+  if (legacyResult.deletedCount > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `Removed ${legacyResult.deletedCount} legacy project-level admin invoice(s) without ticketId.`
+    );
+  }
+
+  try {
+    await AdminInvoiceModel.collection.dropIndex("projectId_1");
+  } catch {
+    // Index missing or already dropped
+  }
+
+  try {
+    await AdminInvoiceModel.collection.dropIndex("ticketId_1");
+  } catch {
+    // Index missing or failed partial build from a prior startup
+  }
+
+  await AdminInvoiceModel.syncIndexes();
+}
+
 export async function findAllAdminInvoices(): Promise<AdminInvoice[]> {
-  const docs = await AdminInvoiceModel.find().sort({ createdAt: -1 });
+  const docs = await AdminInvoiceModel.find(ticketScopedFilter).sort({ createdAt: -1 });
   return docs.map((doc) => toAdminInvoice(doc));
 }
 
@@ -89,7 +127,10 @@ export async function findAdminInvoicesByAdminId(
   const projectIds = projectDocs.map((p) => p._id);
   if (projectIds.length === 0) return [];
 
-  const query: Record<string, unknown> = { projectId: { $in: projectIds } };
+  const query: Record<string, unknown> = {
+    ...ticketScopedFilter,
+    projectId: { $in: projectIds },
+  };
   if (options?.requirePdf) {
     query.pdf = { $ne: null, $exists: true };
   }
@@ -111,22 +152,27 @@ export async function findProjectTitlesByIds(
   return new Map(docs.map((doc) => [doc._id.toString(), doc.title]));
 }
 
-export async function findAdminInvoiceByProjectId(
-  projectId: string
+export async function findAdminInvoiceByTicketId(
+  ticketId: string
 ): Promise<AdminInvoice | null> {
-  if (!mongoose.Types.ObjectId.isValid(projectId)) return null;
-  const doc = await AdminInvoiceModel.findOne({ projectId });
+  if (!mongoose.Types.ObjectId.isValid(ticketId)) return null;
+  const doc = await AdminInvoiceModel.findOne({
+    ticketId: new mongoose.Types.ObjectId(ticketId),
+  });
   return doc ? toAdminInvoice(doc) : null;
 }
 
-/** Upsert (one invoice per project, keyed on projectId) and return the full record. */
-export async function upsertAdminInvoiceByProjectId(
+/** Upsert (one invoice per crew ticket, keyed on ticketId) and return the full record. */
+export async function upsertAdminInvoiceByTicketId(
+  ticketId: string,
   projectId: string,
   data: Partial<Pick<AdminInvoice, "invoiceNumber" | "margin" | "total" | "pdf" | "status">> & {
     sentAt?: Date | null;
   }
 ): Promise<AdminInvoice | null> {
-  if (!mongoose.Types.ObjectId.isValid(projectId)) return null;
+  if (!mongoose.Types.ObjectId.isValid(ticketId) || !mongoose.Types.ObjectId.isValid(projectId)) {
+    return null;
+  }
   const update: Record<string, unknown> = {};
   if (data.invoiceNumber !== undefined) update.invoiceNumber = data.invoiceNumber;
   if (data.margin !== undefined) update.margin = data.margin;
@@ -136,8 +182,14 @@ export async function upsertAdminInvoiceByProjectId(
   if (data.sentAt !== undefined) update.sentAt = data.sentAt;
 
   const doc = await AdminInvoiceModel.findOneAndUpdate(
-    { projectId: new mongoose.Types.ObjectId(projectId) },
-    { $set: update, $setOnInsert: { projectId: new mongoose.Types.ObjectId(projectId) } },
+    { ticketId: new mongoose.Types.ObjectId(ticketId) },
+    {
+      $set: update,
+      $setOnInsert: {
+        ticketId: new mongoose.Types.ObjectId(ticketId),
+        projectId: new mongoose.Types.ObjectId(projectId),
+      },
+    },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
   return doc ? toAdminInvoice(doc) : null;

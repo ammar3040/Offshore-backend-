@@ -7,8 +7,10 @@ export interface SuperAdmin {
   email: string;
   password: string; // hashed password
   phone: string;
-  /** Optional markup value */
+  /** Optional flat markup value */
   markup?: number;
+  /** Optional percentage markup applied to Riya fare (e.g. 2 = 2%). */
+  markupPercentage?: number | null;
   /** Optional cashback value */
   cashback?: number | null;
   /** Per-ticket cancellation fee in admin base currency (env ADMIN_BASE_CURRENCY; same semantic as markup). */
@@ -30,6 +32,7 @@ const superAdminSchema = new Schema<SuperAdminDocument>(
     password: { type: String, required: true, select: false },
     phone: { type: String, required: true },
     markup: { type: Number, required: false },
+    markupPercentage: { type: Number, required: false, default: null },
     cashback: { type: Number, required: false, default: null },
     cancellationCharges: { type: Number, required: false, default: null },
   },
@@ -49,6 +52,7 @@ function toSuperAdmin(doc: SuperAdminDocument): SuperAdmin {
     password: doc.password,
     phone: doc.phone,
     markup: doc.markup,
+    markupPercentage: doc.markupPercentage ?? null,
     cashback: doc.cashback ?? null,
     cancellationCharges: doc.cancellationCharges ?? null,
   };
@@ -62,6 +66,7 @@ function toSuperAdminPublic(doc: SuperAdminDocument): SuperAdminPublic {
     email: doc.email,
     phone: doc.phone,
     markup: doc.markup,
+    markupPercentage: doc.markupPercentage ?? null,
     cashback: doc.cashback ?? null,
     cancellationCharges: doc.cancellationCharges ?? null,
   };
@@ -95,11 +100,17 @@ export async function createSuperAdmin(
 
 export async function updateSuperAdminMarkup(
   id: string,
-  data: { markup?: number; cashback?: number | null; cancellationCharges?: number | null }
+  data: {
+    markup?: number;
+    markupPercentage?: number | null;
+    cashback?: number | null;
+    cancellationCharges?: number | null;
+  }
 ): Promise<SuperAdminPublic | null> {
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
   const update: Record<string, unknown> = {};
   if (data.markup !== undefined) update.markup = data.markup;
+  if (data.markupPercentage !== undefined) update.markupPercentage = data.markupPercentage;
   if (data.cashback !== undefined) update.cashback = data.cashback;
   if (data.cancellationCharges !== undefined) update.cancellationCharges = data.cancellationCharges;
   if (Object.keys(update).length === 0) return findSuperAdminById(id);

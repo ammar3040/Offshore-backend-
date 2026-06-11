@@ -7,7 +7,7 @@ const router = Router();
 router.post("/login", loginAdmin);
 router.get("/me", authenticateAdmin, getAdminMe);
 router.get("/admin-invoices", authenticateAdmin, listAdminPanelInvoices);
-router.get("/admin-invoice/:projectId/pdf", authenticateAdmin, streamAdminPanelInvoicePdf);
+router.get("/admin-invoice/:ticketId/pdf", authenticateAdmin, streamAdminPanelInvoicePdf);
 
 export default router;
 
