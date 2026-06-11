@@ -1604,15 +1604,17 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
 
         const updatedFares = flight.fares.map((fare: any) => {
           const riyaPriceConverted = convert(fare.totalFare, originalCurrency, requestedCurrency, rates);
+          const flatMarkup = localSuperAdminMarkup;
+          const percentageBase = riyaPriceConverted + flatMarkup;
           const percentageMarkupAmount =
-            markupPercentageRaw > 0 ? (riyaPriceConverted * markupPercentageRaw) / 100 : 0;
+            markupPercentageRaw > 0 ? (percentageBase * markupPercentageRaw) / 100 : 0;
           const price = Math.round(
             Math.max(
               0,
-              riyaPriceConverted + percentageMarkupAmount + localSuperAdminMarkup + localCancellationSurcharge
+              riyaPriceConverted + flatMarkup + percentageMarkupAmount + localCancellationSurcharge
             )
           );
-          const markup = Math.round(localSuperAdminMarkup);
+          const markup = Math.round(flatMarkup);
           return {
             ...fare,
             price,
