@@ -12,7 +12,7 @@ import {
   searchAirports,
   searchFlights,
   searchFlightsController,
-  sendTicketToCrewEmail,
+  // sendTicketToCrewEmail,
   uploadTicketPdf,
 } from "../controllers";
 import { authenticateAdmin, authenticateAdminOrCrew, authenticateAdminOrSuperAdmin, authenticateSuperAdmin } from "../middleware/auth";
@@ -46,12 +46,13 @@ router.patch(
   validate(approveCrewTicketSchema),
   approveCrewTicket
 );
-router.post(
-  "/:id/send-ticket-email",
-  authenticateAdminOrSuperAdmin,
-  validate(crewTicketIdParamSchema, "params"),
-  sendTicketToCrewEmail
-);
+// Ticket sending to crew temporarily disabled.
+// router.post(
+//   "/:id/send-ticket-email",
+//   authenticateAdminOrSuperAdmin,
+//   validate(crewTicketIdParamSchema, "params"),
+//   sendTicketToCrewEmail
+// );
 router.post(
   "/:id/upload-ticket",
   authenticateAdminOrSuperAdmin,

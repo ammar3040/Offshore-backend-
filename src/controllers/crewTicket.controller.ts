@@ -23,9 +23,10 @@ import { convert, fetchRates, type CurrencyCode, type ExchangeRates } from "../l
 import { getAdminSettings } from "../lib/admin-settings";
 import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { projectRigObjectId } from "../models/project.model";
-import { sendFlightTicketEmail, sendTicketApprovalRequestEmail } from "../services/email";
+// import { sendFlightTicketEmail, sendTicketApprovalRequestEmail } from "../services/email";
+import { sendTicketApprovalRequestEmail } from "../services/email";
 import type { CrewTicket } from "../models/crewTicket.model";
-import { getSignedCloudinaryDeliveryUrl } from "../lib/cloudinary-asset";
+// import { getSignedCloudinaryDeliveryUrl } from "../lib/cloudinary-asset";
 import { generateAndUploadTicketPdf, resolveCrewTicketPdfBuffer } from "../services/ticketPdf";
 import {
   buildFlightSnapshotFromBookPayload,
@@ -880,22 +881,23 @@ export async function sendTicketToCrewEmail(
       return res.status(404).json({ message: "Crew not found." });
     }
 
-    const { flight: flightData } = buildFlightTicketDataFromCrewTicket(ticket);
-    const signedPdfUrl = ticket.pdf ? getSignedCloudinaryDeliveryUrl(ticket.pdf) ?? undefined : undefined;
-    await sendFlightTicketEmail(
-      crew.email,
-      crew.firstname,
-      flightData,
-      signedPdfUrl,
-      {
-        bookingReference: ticket.bookingReference,
-        passengerName: crewDisplayName(crew),
-        vesselName: vesselDisplayName(ticket),
-      }
-    );
+    // Ticket sending to crew temporarily disabled.
+    // const { flight: flightData } = buildFlightTicketDataFromCrewTicket(ticket);
+    // const signedPdfUrl = ticket.pdf ? getSignedCloudinaryDeliveryUrl(ticket.pdf) ?? undefined : undefined;
+    // await sendFlightTicketEmail(
+    //   crew.email,
+    //   crew.firstname,
+    //   flightData,
+    //   signedPdfUrl,
+    //   {
+    //     bookingReference: ticket.bookingReference,
+    //     passengerName: crewDisplayName(crew),
+    //     vesselName: vesselDisplayName(ticket),
+    //   }
+    // );
 
-    return res.status(200).json({
-      message: "Ticket sent successfully to crew email.",
+    return res.status(503).json({
+      message: "Ticket sending to crew is temporarily disabled.",
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -1636,15 +1638,6 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
         };
       });
     };
-// hrty
-// here
-// here
-// here
-// here
-// here
-// here
-// here
-// here
     const fromData = parseAirport(from);
     const toData = parseAirport(to);
     const sector = from?.COUNTRY === to?.COUNTRY ? "D" : "I";
