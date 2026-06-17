@@ -1,5 +1,6 @@
 import Joi from "joi";
-import { CabinClass, TripType } from "../models/crewTicket.model";
+import { CabinClass, CrewTicketStatus, TripType } from "../models/crewTicket.model";
+import { optionalPaginationQuerySchema } from "./pagination.validation";
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/).message("must be a valid ObjectId");
 
@@ -77,6 +78,13 @@ export const crewIdParamSchema = Joi.object({
   id: objectId.required().messages({
     "any.required": "Crew id is required",
   }),
+});
+
+/** GET /crew-ticket — optional pagination and status filter */
+export const listCrewTicketsQuerySchema = optionalPaginationQuerySchema.keys({
+  status: Joi.string()
+    .valid(...Object.values(CrewTicketStatus))
+    .optional(),
 });
 
 /** Time format HH:mm, date format YYYY-MM-DD */

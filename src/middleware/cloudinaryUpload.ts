@@ -17,12 +17,12 @@ export async function uploadCrewFilesToCloudinary(
   next: NextFunction
 ) {
   const files = req.files;
-  const hasPassport = files?.passport_document?.[0];
-  const hasIdentity = files?.identity_document?.[0];
+  const passportFile = files?.passport_document?.[0];
+  const identityFile = files?.identity_document?.[0];
   const certificateFiles = files?.certificate_document ?? [];
-  const hasCertificates = certificateFiles.length > 0;
+  const hasCertificateFiles = certificateFiles.length > 0;
 
-  if (!hasPassport || !hasIdentity || !hasCertificates) {
+  if (!passportFile && !identityFile && !hasCertificateFiles) {
     return next();
   }
 
@@ -36,39 +36,49 @@ export async function uploadCrewFilesToCloudinary(
     });
   }
 
-  try {
-    const passportFile = files!.passport_document![0];
-    const identityFile = files!.identity_document![0];
-
-    const uploadFile = async (
-      file: Express.Multer.File,
-      folder: string
-    ): Promise<string> => {
-      const b64 = file.buffer.toString("base64");
-      const dataUri = `data:${file.mimetype};base64,${b64}`;
-      const result = await cloudinary.uploader.upload(dataUri, {
-        folder,
-        resource_type: "auto",
-      });
-      return result.secure_url;
-    };
-
-    const certUploads = certificateFiles.map((file) =>
-      uploadFile(file, `${CLOUDINARY_CREW_FOLDER}/certificate`)
-    );
-
-    const [passportUrl, identityUrl, ...certificateUrls] = await Promise.all([
-      uploadFile(passportFile, `${CLOUDINARY_CREW_FOLDER}/passport`),
-      uploadFile(identityFile, `${CLOUDINARY_CREW_FOLDER}/identity`),
-      ...certUploads,
-    ]);
-
-    (passportFile as Express.Multer.File & { path?: string }).path = passportUrl;
-    (identityFile as Express.Multer.File & { path?: string }).path = identityUrl;
-    certificateFiles.forEach((file, i) => {
-      (file as Express.Multer.File & { path?: string }).path = certificateUrls[i];
+  const uploadFile = async (
+    file: Express.Multer.File,
+    folder: string
+  ): Promise<string> => {
+    const b64 = file.buffer.toString("base64");
+    const dataUri = `data:${file.mimetype};base64,${b64}`;
+    const result = await cloudinary.uploader.upload(dataUri, {
+      folder,
+      resource_type: "auto",
     });
+    return result.secure_url;
+  };
 
+  try {
+    const uploads: Promise<void>[] = [];
+    if (passportFile) {
+      uploads.push(
+        uploadFile(passportFile, `${CLOUDINARY_CREW_FOLDER}/passport`).then(
+          (url) => {
+            (passportFile as Express.Multer.File & { path?: string }).path = url;
+          }
+        )
+      );
+    }
+    if (identityFile) {
+      uploads.push(
+        uploadFile(identityFile, `${CLOUDINARY_CREW_FOLDER}/identity`).then(
+          (url) => {
+            (identityFile as Express.Multer.File & { path?: string }).path = url;
+          }
+        )
+      );
+    }
+    for (const certificateFile of certificateFiles) {
+      uploads.push(
+        uploadFile(certificateFile, `${CLOUDINARY_CREW_FOLDER}/certificate`).then(
+          (url) => {
+            (certificateFile as Express.Multer.File & { path?: string }).path = url;
+          }
+        )
+      );
+    }
+    await Promise.all(uploads);
     next();
   } catch (error) {
     // eslint-disable-next-line no-console

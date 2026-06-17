@@ -7,8 +7,8 @@ import {
   deleteCrewTicket,
   findAdminById,
   findCrewTicketById,
-  findAllCrewTickets,
-  findCrewTicketsByAdminId,
+  findAllCrewTicketsPaginated,
+  findCrewTicketsByAdminIdPaginated,
   findCrewTicketsByCrewId,
   findCrewByCrewId,
   findProjectById,
@@ -18,7 +18,7 @@ import {
   updateAdminBalance,
   updateAdminCancellationState,
 } from "../models";
-import { CabinClass, CrewTicketStatus, TripType } from "../models/crewTicket.model";
+import { CabinClass, CrewTicketStatus, TripType, type CrewTicketListOptions } from "../models/crewTicket.model";
 import { convert, fetchRates, type CurrencyCode, type ExchangeRates } from "../lib/currency";
 import { getAdminSettings } from "../lib/admin-settings";
 import { findFirstSuperAdmin } from "../models/superadmin.model";
@@ -110,10 +110,24 @@ export async function getCrewTickets(req: AuthenticatedRequest, res: Response) {
       return res.status(401).json({ message: "Authentication required." });
     }
 
-    const tickets = isSuperAdmin(role)
-      ? await findAllCrewTickets()
-      : await findCrewTicketsByAdminId(userId);
-    return res.json({ crewTickets: tickets.map(withTicketPdfAccess) });
+    const { page, limit, status } = req.query as {
+      page?: number;
+      limit?: number;
+      status?: CrewTicketStatus;
+    };
+    const options: CrewTicketListOptions = { page, limit, status };
+
+    const result = isSuperAdmin(role)
+      ? await findAllCrewTicketsPaginated(options)
+      : await findCrewTicketsByAdminIdPaginated(userId, options);
+
+    const payload: { crewTickets: ReturnType<typeof withTicketPdfAccess>[]; pagination?: typeof result.pagination } = {
+      crewTickets: result.tickets.map(withTicketPdfAccess),
+    };
+    if (result.pagination) {
+      payload.pagination = result.pagination;
+    }
+    return res.json(payload);
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching crew tickets:", error);

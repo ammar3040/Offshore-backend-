@@ -12,6 +12,8 @@ import {
   upsertMarkupPercentage,
 } from "../controllers";
 import { authenticateSuperAdmin } from "../middleware/auth";
+import { validate } from "../middleware/validate";
+import { listAdminInvoicesQuerySchema } from "../validations/adminInvoice.validation";
 import { adminInvoicePdfUpload } from "../middleware/upload";
 import { uploadAdminInvoicePdfToCloudinary } from "../middleware/cloudinaryUpload";
 
@@ -24,7 +26,7 @@ router.post("/admins", authenticateSuperAdmin, createAdminBySuperAdmin);
 router.put("/markup", authenticateSuperAdmin, upsertMarkup);
 router.put("/markup_percentage", authenticateSuperAdmin, upsertMarkupPercentage);
 
-router.get("/admin-invoices", authenticateSuperAdmin, listAdminInvoices);
+router.get("/admin-invoices", authenticateSuperAdmin, validate(listAdminInvoicesQuerySchema, "query"), listAdminInvoices);
 router.get("/admin-invoice/:ticketId/pdf", authenticateSuperAdmin, streamSuperadminInvoicePdf);
 router.post(
   "/admin-invoice/:ticketId/upload",

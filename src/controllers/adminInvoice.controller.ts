@@ -7,6 +7,7 @@ import {
   findAdminInvoiceByTicketId,
   findAdminInvoicesByAdminId,
   findAllAdminInvoices,
+  findAllAdminInvoicesPaginated,
   findCrewByCrewId,
   findProjectById,
   findProjectTitlesByIds,
@@ -178,8 +179,19 @@ function ticketSubtotal(ticket: CrewTicket): number {
 }
 
 /** GET /superadmin/admin-invoices — list all stored invoices. */
-export async function listAdminInvoices(_req: AuthenticatedRequest, res: Response) {
+export async function listAdminInvoices(req: AuthenticatedRequest, res: Response) {
   try {
+    const { page, limit } = req.query as { page?: number; limit?: number };
+
+    if (limit) {
+      const result = await findAllAdminInvoicesPaginated({ page: page ?? 1, limit });
+      const enriched = await enrichInvoicesWithPassengerNames(result.invoices);
+      return res.json({
+        adminInvoices: enriched.map(withSignedPdfUrl),
+        pagination: result.pagination,
+      });
+    }
+
     const adminInvoices = await findAllAdminInvoices();
     const enriched = await enrichInvoicesWithPassengerNames(adminInvoices);
     return res.json({ adminInvoices: enriched.map(withSignedPdfUrl) });

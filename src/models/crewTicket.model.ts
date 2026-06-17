@@ -262,6 +262,89 @@ export async function findCrewTicketsByCrewId(crewId: string): Promise<CrewTicke
   return docs.map((doc) => toCrewTicket(doc));
 }
 
+export interface CrewTicketListOptions {
+  page?: number;
+  limit?: number;
+  status?: CrewTicketStatus;
+}
+
+export interface ListPagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface PaginatedCrewTicketList {
+  tickets: CrewTicket[];
+  pagination?: ListPagination;
+}
+
+async function buildAdminCrewTicketAccessFilter(
+  adminId: string
+): Promise<Record<string, unknown> | null> {
+  if (!mongoose.Types.ObjectId.isValid(adminId)) return null;
+  const adminObjectId = new mongoose.Types.ObjectId(adminId);
+  const projectDocs = await ProjectModel.find({ createdBy: adminObjectId }).select("_id");
+  const projectIds = projectDocs.map((p) => p._id);
+  return projectIds.length > 0
+    ? {
+        $or: [
+          { project_id: { $in: projectIds } },
+          {
+            createdBy: adminObjectId,
+            $or: [{ project_id: null }, { project_id: { $exists: false } }],
+          },
+        ],
+      }
+    : {
+        createdBy: adminObjectId,
+        $or: [{ project_id: null }, { project_id: { $exists: false } }],
+      };
+}
+
+async function queryCrewTickets(
+  filter: Record<string, unknown>,
+  options?: CrewTicketListOptions
+): Promise<PaginatedCrewTicketList> {
+  const fullFilter = options?.status ? { ...filter, status: options.status } : filter;
+  const baseQuery = CrewTicketModel.find(fullFilter)
+    .sort({ createdAt: -1 })
+    .populate("crew_id")
+    .populate("project_id")
+    .populate("rig_id");
+
+  if (!options?.limit) {
+    const docs = await baseQuery;
+    return { tickets: docs.map((doc) => toCrewTicket(doc)) };
+  }
+
+  const page = options.page ?? 1;
+  const limit = options.limit;
+  const total = await CrewTicketModel.countDocuments(fullFilter);
+  const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+  const docs = await baseQuery.skip((page - 1) * limit).limit(limit);
+  return {
+    tickets: docs.map((doc) => toCrewTicket(doc)),
+    pagination: { page, limit, total, totalPages },
+  };
+}
+
+export async function findAllCrewTicketsPaginated(
+  options?: CrewTicketListOptions
+): Promise<PaginatedCrewTicketList> {
+  return queryCrewTickets({}, options);
+}
+
+export async function findCrewTicketsByAdminIdPaginated(
+  adminId: string,
+  options?: CrewTicketListOptions
+): Promise<PaginatedCrewTicketList> {
+  const accessFilter = await buildAdminCrewTicketAccessFilter(adminId);
+  if (!accessFilter) return { tickets: [] };
+  return queryCrewTickets(accessFilter, options);
+}
+
 export async function findAllCrewTickets(): Promise<CrewTicket[]> {
   const docs = await CrewTicketModel.find()
     .sort({ createdAt: -1 })
@@ -272,25 +355,8 @@ export async function findAllCrewTickets(): Promise<CrewTicket[]> {
 }
 
 export async function findCrewTicketsByAdminId(adminId: string): Promise<CrewTicket[]> {
-  if (!mongoose.Types.ObjectId.isValid(adminId)) return [];
-  const adminObjectId = new mongoose.Types.ObjectId(adminId);
-  const projectDocs = await ProjectModel.find({ createdBy: adminObjectId }).select("_id");
-  const projectIds = projectDocs.map((p) => p._id);
-  const accessFilter =
-    projectIds.length > 0
-      ? {
-          $or: [
-            { project_id: { $in: projectIds } },
-            {
-              createdBy: adminObjectId,
-              $or: [{ project_id: null }, { project_id: { $exists: false } }],
-            },
-          ],
-        }
-      : {
-          createdBy: adminObjectId,
-          $or: [{ project_id: null }, { project_id: { $exists: false } }],
-        };
+  const accessFilter = await buildAdminCrewTicketAccessFilter(adminId);
+  if (!accessFilter) return [];
   const docs = await CrewTicketModel.find(accessFilter)
     .sort({ createdAt: -1 })
     .populate("crew_id")

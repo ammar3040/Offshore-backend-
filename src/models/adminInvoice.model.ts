@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 import { ProjectModel } from "./project.model";
+import type { ListPagination } from "./crewTicket.model";
 
 export enum AdminInvoiceStatus {
   Draft = "DRAFT",
@@ -111,6 +112,33 @@ export async function ensureAdminInvoiceIndexes(): Promise<void> {
 export async function findAllAdminInvoices(): Promise<AdminInvoice[]> {
   const docs = await AdminInvoiceModel.find(ticketScopedFilter).sort({ createdAt: -1 });
   return docs.map((doc) => toAdminInvoice(doc));
+}
+
+export interface AdminInvoiceListOptions {
+  page?: number;
+  limit?: number;
+}
+
+export interface PaginatedAdminInvoiceList {
+  invoices: AdminInvoice[];
+  pagination?: ListPagination;
+}
+
+export async function findAllAdminInvoicesPaginated(
+  options: AdminInvoiceListOptions & { limit: number }
+): Promise<PaginatedAdminInvoiceList> {
+  const page = options.page ?? 1;
+  const limit = options.limit;
+  const total = await AdminInvoiceModel.countDocuments(ticketScopedFilter);
+  const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+  const docs = await AdminInvoiceModel.find(ticketScopedFilter)
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit);
+  return {
+    invoices: docs.map((doc) => toAdminInvoice(doc)),
+    pagination: { page, limit, total, totalPages },
+  };
 }
 
 /** Invoices for projects owned by the given admin (optionally only rows with a PDF). */

@@ -25,13 +25,14 @@ import {
   createCrewTicketSchema,
   crewIdParamSchema,
   crewTicketIdParamSchema,
+  listCrewTicketsQuerySchema,
   searchFlightsSchema,
   updateCrewTicketSchema,
 } from "../validations/crewTicket.validation";
 
 const router = Router();
 
-router.get("/", authenticateAdminOrSuperAdmin, getCrewTickets);
+router.get("/", authenticateAdminOrSuperAdmin, validate(listCrewTicketsQuerySchema, "query"), getCrewTickets);
 router.get("/airports/search", searchAirports);
 router.get("/crew/:id", authenticateAdminOrCrew, validate(crewIdParamSchema, "params"), getCrewTicketsByCrewId);
 router.get("/:id/pdf", authenticateAdminOrCrew, validate(crewTicketIdParamSchema, "params"), downloadCrewTicketPdf);
