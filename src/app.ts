@@ -19,8 +19,14 @@ const allowedOrigins = [
 
 const corsOptions: CorsOptions = {
   origin(origin, callback) {
-    const normalizedOrigin = origin?.replace(/\/$/, "");
-    if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    const normalizedOrigin = origin.replace(/\/$/, "");
+    const isLocalhost = /^http:\/\/localhost(:\d+)?$/.test(normalizedOrigin) || /^http:\/\/127\.0\.0\.1(:\d+)?$/.test(normalizedOrigin);
+    
+    if (isLocalhost || allowedOrigins.includes(normalizedOrigin)) {
       callback(null, true);
       return;
     }
@@ -28,7 +34,7 @@ const corsOptions: CorsOptions = {
   },
   credentials: true,
   methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-auth-token", "x-token", "X-Token"],
   exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
   optionsSuccessStatus: 204,
 };
