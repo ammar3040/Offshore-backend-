@@ -10,6 +10,7 @@
     "install:chrome": "puppeteer browsers install chrome",
     "seed:superadmin": "ts-node scripts/seed-superadmin.ts",
     "seed:demo": "ts-node scripts/seed-demo-data.ts",
+    "seed:more": "ts-node scripts/seed-more-dummy.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

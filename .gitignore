@@ -13,4 +13,5 @@
 /backups
 /cache
 /scripts
+scripts/seed-more-dummy.ts
 .cursor/

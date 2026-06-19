@@ -3,9 +3,9 @@ import cors, { CorsOptions } from "cors";
 import express, { Request, Response } from "express";
 import routes from "./routes";
 import { connectDB } from "./dbconnection";
+import { encryptionMiddleware } from "./middleware/encryption";
 
 const app = express();
-
 const allowedOrigins = [
   "https://off-shore-frontend.vercel.app",
   "http://localhost:5173",
@@ -36,6 +36,7 @@ const corsOptions: CorsOptions = {
 app.use(cors(corsOptions));
 
 app.use(express.json());
+app.use(encryptionMiddleware);
 
 app.use(async (req, _res, next) => {
   if (req.method === "OPTIONS") {
