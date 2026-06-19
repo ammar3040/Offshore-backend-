@@ -2,9 +2,21 @@ import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 
 const IV_LENGTH = 16;
-const AES_SECRET = process.env.AES_SECRET || "default_dev_secret_key_32_characters";
 
-function getKey(secret: string): Buffer {
+function getCleanSecret(): string {
+  let secret = process.env.AES_SECRET || "default_dev_secret_key_32_characters";
+  // Strip enclosing quotes if present (common copy-paste issue on cloud hosts)
+  if (
+    (secret.startsWith('"') && secret.endsWith('"')) ||
+    (secret.startsWith("'") && secret.endsWith("'"))
+  ) {
+    secret = secret.slice(1, -1);
+  }
+  return secret.trim();
+}
+
+function getKey(): Buffer {
+  const secret = getCleanSecret();
   return crypto.createHash("sha256").update(secret).digest();
 }
 
@@ -23,7 +35,7 @@ export function decryptPayload(encryptedBase64: string): any {
     const iv = raw.slice(0, IV_LENGTH);
     const cipherText = raw.slice(IV_LENGTH);
 
-    const key = getKey(AES_SECRET);
+    const key = getKey();
     const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
 
     // AuthTag is the last 16 bytes
@@ -53,7 +65,7 @@ export function decryptPayload(encryptedBase64: string): any {
 export function encryptPayload(payload: any): string {
   try {
     const iv = crypto.randomBytes(IV_LENGTH);
-    const key = getKey(AES_SECRET);
+    const key = getKey();
 
     const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
     const encrypted = Buffer.concat([
