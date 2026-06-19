@@ -1,0 +1,16 @@
+.env
+/node_modules
+/dist
+/build
+/logs
+/temp
+/uploads
+/backups
+/cache
+/logs
+/temp
+/uploads
+/backups
+/cache
+/scripts
+.cursor/
