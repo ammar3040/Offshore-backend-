@@ -18,15 +18,9 @@ const allowedOrigins = [
 ];
 
 const corsOptions: CorsOptions = {
-  origin(origin, callback) {
-    // Allow all origins dynamically (essential for credentials: true compatibility)
-    callback(null, true);
-  },
+  origin: true,
   credentials: true,
   methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-auth-token", "x-token", "X-Token"],
-  exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
-  optionsSuccessStatus: 204,
 };
 
 app.use(cors(corsOptions));
