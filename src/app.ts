@@ -19,18 +19,8 @@ const allowedOrigins = [
 
 const corsOptions: CorsOptions = {
   origin(origin, callback) {
-    if (!origin) {
-      callback(null, true);
-      return;
-    }
-    const normalizedOrigin = origin.replace(/\/$/, "");
-    const isLocalhost = /^http:\/\/localhost(:\d+)?$/.test(normalizedOrigin) || /^http:\/\/127\.0\.0\.1(:\d+)?$/.test(normalizedOrigin);
-    
-    if (isLocalhost || allowedOrigins.includes(normalizedOrigin)) {
-      callback(null, true);
-      return;
-    }
-    callback(null, false);
+    // Allow all origins dynamically (essential for credentials: true compatibility)
+    callback(null, true);
   },
   credentials: true,
   methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
