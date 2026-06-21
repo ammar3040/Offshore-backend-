@@ -90,6 +90,7 @@ export const listCrewTicketsQuerySchema = optionalPaginationQuerySchema.keys({
 /** Time format HH:mm, date format YYYY-MM-DD */
 const timePattern = /^\d{2}:\d{2}$/;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+const timeFilterMode = Joi.string().valid("before", "after");
 
 /** For POST /search-flights - pagination params + time filters */
 export const searchFlightsSchema = Joi.object({
@@ -102,12 +103,22 @@ export const searchFlightsSchema = Joi.object({
   departureTime: Joi.string().pattern(timePattern).optional().messages({
     "string.pattern.base": "departureTime must be HH:mm (e.g. 10:30)",
   }),
+  /** When departureTime is set: after = flights departing at or after that time (default); before = at or before. */
+  departureTimeMode: timeFilterMode.optional().default("after"),
   arrivalDate: Joi.string().pattern(datePattern).optional().messages({
     "string.pattern.base": "arrivalDate must be YYYY-MM-DD",
   }),
   arrivalTime: Joi.string().pattern(timePattern).optional().messages({
     "string.pattern.base": "arrivalTime must be HH:mm (e.g. 18:45)",
   }),
+  /** When arrivalTime is set: before = flights arriving at or before that time (default); after = at or after. */
+  arrivalTimeMode: timeFilterMode.optional().default("before"),
+  /** Return-leg departure time for round-trip, HH:mm */
+  returnTime: Joi.string().pattern(timePattern).optional().messages({
+    "string.pattern.base": "returnTime must be HH:mm (e.g. 14:00)",
+  }),
+  /** When returnTime is set: after = return flights departing at or after that time (default); before = at or before. */
+  returnTimeMode: timeFilterMode.optional().default("after"),
   project_id: objectId.optional(),
   crew_ids: Joi.array().items(objectId).optional().default([]),
 }).unknown(true);

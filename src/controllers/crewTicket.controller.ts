@@ -1179,6 +1179,98 @@ function durationToMinutes(duration: unknown): number | null {
   return hours * 60 + minutes;
 }
 
+function formatDurationMinutes(totalMinutes: number): string {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+/** Outbound/inbound summary for a single direction (initial or return leg). */
+function summarizeFlightDirection(legs: unknown[], directionStops?: number) {
+  const legArr = Array.isArray(legs) ? legs : [];
+  if (!legArr.length) {
+    return {
+      departureTime: undefined,
+      arrivalTime: undefined,
+      from: undefined,
+      to: undefined,
+      duration: undefined,
+      stops: directionStops ?? 0,
+      legs: [] as unknown[],
+      airlineName: undefined,
+      airlineCode: undefined,
+    };
+  }
+
+  const first = legArr[0] as Record<string, unknown>;
+  const last = legArr[legArr.length - 1] as Record<string, unknown>;
+  const durationMinutes = legArr.reduce((sum: number, leg) => {
+    const minutes = durationToMinutes((leg as Record<string, unknown>)?.duration);
+    return minutes == null ? sum : sum + minutes;
+  }, 0);
+
+  return {
+    departureTime: first?.departureTime as string | undefined,
+    arrivalTime: last?.arrivalTime as string | undefined,
+    from: first?.from as string | undefined,
+    to: last?.to as string | undefined,
+    duration:
+      durationMinutes > 0
+        ? formatDurationMinutes(durationMinutes)
+        : (first?.duration as string | undefined),
+    stops:
+      directionStops ??
+      Math.max(...legArr.map((leg) => Number((leg as Record<string, unknown>)?.stops) || 0)),
+    legs: legArr,
+    airlineName: first?.airlineName as string | undefined,
+    airlineCode: first?.airlineCode as string | undefined,
+  };
+}
+
+function combineRoundTripFlights(outboundFlight: any, inboundFlight: any, outboundRaw: any, inboundRaw: any) {
+  const outbound = summarizeFlightDirection(outboundFlight.legs, outboundFlight.stops);
+  const inbound = summarizeFlightDirection(inboundFlight.legs, inboundFlight.stops);
+
+  return {
+    id: `rt-${outboundFlight.id}-${inboundFlight.id}`,
+    tripType: "round-trip" as const,
+    outbound,
+    inbound,
+    /** Whole-trip bounds: outbound departure through return arrival. */
+    departureTime: outbound.departureTime,
+    arrivalTime: inbound.arrivalTime,
+    /** Flat legs for POST /book compatibility. */
+    legs: [...outbound.legs, ...inbound.legs],
+    fares: outboundFlight.fares.map((fare: any, fareIdx: number) => {
+      const inboundFare = inboundFlight.fares[fareIdx] ?? inboundFlight.fares[0];
+      return {
+        ...fare,
+        price: (fare.price ?? 0) + (inboundFare.price ?? 0),
+        markup: (fare.markup ?? 0) + (inboundFare.markup ?? 0),
+        percentageMarkup: (fare.percentageMarkup ?? 0) + (inboundFare.percentageMarkup ?? 0),
+        totalFare: fare.totalFare + inboundFare.totalFare,
+        basicFare: fare.basicFare + inboundFare.basicFare,
+        cancellationSurcharge:
+          (fare.cancellationSurcharge ?? 0) + (inboundFare.cancellationSurcharge ?? 0),
+      };
+    }),
+    fareBreakdown: {
+      total: outboundRaw.fareBreakdown.total + inboundRaw.fareBreakdown.total,
+      base: outboundRaw.fareBreakdown.base + inboundRaw.fareBreakdown.base,
+      tax: outboundRaw.fareBreakdown.tax + inboundRaw.fareBreakdown.tax,
+      serviceFee: outboundRaw.fareBreakdown.serviceFee + inboundRaw.fareBreakdown.serviceFee,
+      gst: outboundRaw.fareBreakdown.gst + inboundRaw.fareBreakdown.gst,
+    },
+    airlineName: outbound.airlineName,
+    airlineCode: outbound.airlineCode,
+    stops: (outboundFlight.stops ?? 0) + (inboundFlight.stops ?? 0),
+    isMarineFare: isMarineFlight(outboundFlight) || isMarineFlight(inboundFlight),
+    cashback: outboundFlight.cashback ?? inboundFlight.cashback ?? null,
+    appliedIncentive: outboundFlight.appliedIncentive ?? inboundFlight.appliedIncentive ?? null,
+    originalCurrency: outboundFlight.originalCurrency ?? inboundFlight.originalCurrency,
+  };
+}
+
 function dateTimeToMs(value: unknown): number | null {
   if (typeof value !== "string" || !value) return null;
   const time = new Date(value).getTime();
@@ -1186,6 +1278,14 @@ function dateTimeToMs(value: unknown): number | null {
 }
 
 function flightDurationMinutes(flight: any): number | null {
+  if (flight?.tripType === "round-trip" && flight.outbound?.legs && flight.inbound?.legs) {
+    const outboundMinutes = flightDurationMinutes({ legs: flight.outbound.legs });
+    const inboundMinutes = flightDurationMinutes({ legs: flight.inbound.legs });
+    if (outboundMinutes != null && inboundMinutes != null) {
+      return outboundMinutes + inboundMinutes;
+    }
+  }
+
   const legs = Array.isArray(flight?.legs) ? flight.legs : [];
   if (legs.length === 0) return null;
 
@@ -1218,9 +1318,11 @@ function flightSortValue(flight: any, sortBy: FlightSortBy): number | null {
     case "stops":
       return Number.isFinite(Number(flight?.stops)) ? Number(flight.stops) : null;
     case "departureTime":
-      return dateTimeToMs(legs[0]?.departureTime);
+      return dateTimeToMs(flight?.outbound?.departureTime ?? legs[0]?.departureTime);
     case "arrivalTime":
-      return dateTimeToMs(legs[legs.length - 1]?.arrivalTime);
+      return dateTimeToMs(
+        flight?.inbound?.arrivalTime ?? legs[legs.length - 1]?.arrivalTime
+      );
     default:
       return null;
   }
@@ -1534,8 +1636,12 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
       sortBy,
       sortOrder = "asc",
       departureTime: filterDepartureTime,
+      departureTimeMode = "after",
       arrivalDate: filterArrivalDate,
       arrivalTime: filterArrivalTime,
+      arrivalTimeMode = "before",
+      returnTime: filterReturnTime,
+      returnTimeMode = "after",
       /** When true, Riya search requests non-stop flights only for this segment. */
       directOnly = false,
     } = body;
@@ -1674,27 +1780,65 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
     const formattedReturnDate =
       tripType === "round-trip" && returnDate ? formatRiyaDate(returnDate) : emptyRiyaDate;
 
-    const hasTimeFilters = filterDepartureTime || filterArrivalDate || filterArrivalTime;
+    const hasOutboundTimeFilters =
+      filterDepartureTime || filterArrivalDate || filterArrivalTime;
+    const hasReturnTimeFilters = Boolean(filterReturnTime);
 
     const parseDateTime = (isoStr: string) => {
       const match = String(isoStr || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/);
       return match ? { date: match[1], time: `${match[2]}:${match[3]}` } : null;
     };
 
-    const matchesTimeFilters = (flight: any) => {
-      if (!hasTimeFilters) return true;
+    type TimeFilterMode = "before" | "after";
+
+    const matchesTimeWithMode = (
+      actual: string,
+      filter: string,
+      mode: TimeFilterMode
+    ): boolean => {
+      if (mode === "before") return actual <= filter;
+      return actual >= filter;
+    };
+
+    const matchesOutboundTimeFilters = (flight: any) => {
+      if (!hasOutboundTimeFilters) return true;
+      const legs = flight?.legs ?? [];
+      if (!legs.length) return true;
+
+      const firstLeg = legs[0];
+      const lastLeg = legs[legs.length - 1];
+      const dep = parseDateTime(firstLeg?.departureTime);
+      const arr = parseDateTime(lastLeg?.arrivalTime);
+      if (!dep || !arr) return true;
+
+      if (
+        filterDepartureTime &&
+        !matchesTimeWithMode(dep.time, filterDepartureTime, departureTimeMode)
+      ) {
+        return false;
+      }
+      if (filterArrivalDate && arr.date !== filterArrivalDate) return false;
+      if (
+        filterArrivalTime &&
+        !matchesTimeWithMode(arr.time, filterArrivalTime, arrivalTimeMode)
+      ) {
+        return false;
+      }
+      return true;
+    };
+
+    const matchesReturnTimeFilters = (flight: any) => {
+      if (!hasReturnTimeFilters) return true;
       const firstLeg = flight?.legs?.[0];
       if (!firstLeg) return true;
 
       const dep = parseDateTime(firstLeg.departureTime);
-      const arr = parseDateTime(firstLeg.arrivalTime);
-      if (!dep || !arr) return true;
+      if (!dep) return true;
 
-      if (filterDepartureTime && dep.time < filterDepartureTime) return false;
-      if (filterArrivalDate && arr.date !== filterArrivalDate) return false;
-      if (filterArrivalTime && arr.time > filterArrivalTime) return false;
-      return true;
+      return matchesTimeWithMode(dep.time, filterReturnTime, returnTimeMode);
     };
+
+    const matchesTimeFilters = matchesOutboundTimeFilters;
 
     const matchesDirectOnly = (flight: any) => {
       if (!directOnly) return true;
@@ -1755,40 +1899,13 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
         const oRaw = outResults[i];
         const rRaw = inResults[i];
         if (!o || !r || !oRaw || !rRaw) continue;
+        if (!matchesOutboundTimeFilters(o)) continue;
+        if (!matchesReturnTimeFilters(r)) continue;
+        if (!matchesDirectOnly(o) || !matchesDirectOnly(r)) continue;
 
-        results.push({
-          ...o,
-          id: `rt-${o.id}-${r.id}`,
-          legs: [...o.legs, ...r.legs],
-          fares: o.fares.map((f: any, fIdx: number) => {
-            const rFare = r.fares[fIdx] ?? r.fares[0];
-            return {
-              ...f,
-              price: (f.price ?? 0) + (rFare.price ?? 0),
-              markup: (f.markup ?? 0) + (rFare.markup ?? 0),
-              percentageMarkup: (f.percentageMarkup ?? 0) + (rFare.percentageMarkup ?? 0),
-              totalFare: f.totalFare + rFare.totalFare,
-              basicFare: f.basicFare + rFare.basicFare,
-            };
-          }),
-          fareBreakdown: {
-            total: oRaw.fareBreakdown.total + rRaw.fareBreakdown.total,
-            base: oRaw.fareBreakdown.base + rRaw.fareBreakdown.base,
-            tax: oRaw.fareBreakdown.tax + rRaw.fareBreakdown.tax,
-            serviceFee: oRaw.fareBreakdown.serviceFee + rRaw.fareBreakdown.serviceFee,
-            gst: oRaw.fareBreakdown.gst + rRaw.fareBreakdown.gst,
-          },
-          airlineName: o.legs[0]?.airlineName,
-          airlineCode: o.legs[0]?.airlineCode,
-          stops: o.stops + r.stops,
-          isMarineFare: isMarineFlight(o) || isMarineFlight(r),
-        });
+        results.push(combineRoundTripFlights(o, r, oRaw, rRaw));
       }
-      const flights = sortFlights(
-        results.filter(matchesTimeFilters).filter(matchesDirectOnly),
-        sortBy,
-        sortOrder
-      );
+      const flights = sortFlights(results, sortBy, sortOrder);
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
       const startIndex = (page - 1) * limit;
