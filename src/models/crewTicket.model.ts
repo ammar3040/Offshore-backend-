@@ -481,6 +481,48 @@ export async function sumMarkupByProject(projectId: string): Promise<number> {
   return result[0]?.total ?? 0;
 }
 
+export interface CrewTicketReportSpendsRow {
+  price: number;
+  class: string;
+  to: { COUNTRYNAME?: string; COUNTRY?: string };
+  createdAt: Date;
+}
+
+export async function buildCrewTicketReportSpendsScopeFilter(options: {
+  userId: string;
+  isSuperAdmin: boolean;
+  projectId?: string;
+}): Promise<Record<string, unknown> | null> {
+  const { userId, isSuperAdmin, projectId } = options;
+
+  if (projectId) {
+    if (!mongoose.Types.ObjectId.isValid(projectId)) return null;
+    const projectFilter = { project_id: new mongoose.Types.ObjectId(projectId) };
+    if (isSuperAdmin) return projectFilter;
+    const accessFilter = await buildAdminCrewTicketAccessFilter(userId);
+    if (!accessFilter) return null;
+    return { $and: [accessFilter, projectFilter] };
+  }
+
+  if (isSuperAdmin) return {};
+  return buildAdminCrewTicketAccessFilter(userId);
+}
+
+export async function findCrewTicketRowsForReportSpends(
+  filter: Record<string, unknown>
+): Promise<CrewTicketReportSpendsRow[]> {
+  const docs = await CrewTicketModel.find(filter)
+    .select("price class to createdAt")
+    .sort({ createdAt: -1 })
+    .lean<Array<CrewTicketReportSpendsRow & { _id: unknown }>>();
+  return docs.map((doc) => ({
+    price: doc.price,
+    class: doc.class,
+    to: doc.to,
+    createdAt: doc.createdAt,
+  }));
+}
+
 /** Sum of `price` (GBP) across this project's APPROVED crew tickets — the invoice ticket subtotal. */
 export async function sumApprovedTicketPriceByProject(projectId: string): Promise<number> {
   if (!mongoose.Types.ObjectId.isValid(projectId)) return 0;

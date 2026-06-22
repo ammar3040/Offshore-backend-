@@ -6,6 +6,7 @@ import {
   downloadCrewTicketPdf,
   getCrewTicketById,
   getCrewTickets,
+  getCrewTicketReportSpends,
   getCrewTicketsByCrewId,
   patchCrewTicket,
   postCrewTicket,
@@ -26,6 +27,7 @@ import {
   crewIdParamSchema,
   crewTicketIdParamSchema,
   listCrewTicketsQuerySchema,
+  reportSpendsQuerySchema,
   searchFlightsSchema,
   updateCrewTicketSchema,
 } from "../validations/crewTicket.validation";
@@ -33,6 +35,12 @@ import {
 const router = Router();
 
 router.get("/", authenticateAdminOrSuperAdmin, validate(listCrewTicketsQuerySchema, "query"), getCrewTickets);
+router.get(
+  "/spends",
+  authenticateAdminOrSuperAdmin,
+  validate(reportSpendsQuerySchema, "query"),
+  getCrewTicketReportSpends
+);
 router.get("/airports/search", searchAirports);
 router.get("/crew/:id", authenticateAdminOrCrew, validate(crewIdParamSchema, "params"), getCrewTicketsByCrewId);
 router.get("/:id/pdf", authenticateAdminOrCrew, validate(crewTicketIdParamSchema, "params"), downloadCrewTicketPdf);

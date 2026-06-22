@@ -10,6 +10,8 @@ import {
   findAllCrewTicketsPaginated,
   findCrewTicketsByAdminIdPaginated,
   findCrewTicketsByCrewId,
+  buildCrewTicketReportSpendsScopeFilter,
+  findCrewTicketRowsForReportSpends,
   findCrewByCrewId,
   findProjectById,
   updateCrewTicket,
@@ -51,6 +53,7 @@ import {
   cancellationInstallmentInCurrency,
   revertCancellationAccrual,
 } from "../services/cancellation-debt";
+import { buildReportSpendsFromTickets } from "../services/crew-ticket-report-spends";
 
 function refId(value: unknown): string {
   if (typeof value === "object" && value && "_id" in value) {
@@ -131,6 +134,42 @@ export async function getCrewTickets(req: AuthenticatedRequest, res: Response) {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching crew tickets:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+/** GET /crew-ticket/spends — pre-aggregated flight spend analytics for the Report Spends tab. */
+export async function getCrewTicketReportSpends(req: AuthenticatedRequest, res: Response) {
+  try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const { project_id: projectId } = req.query as { project_id?: string };
+
+    if (projectId && !(await projectOwnedByCaller(projectId, userId, role))) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
+    const scopeFilter = await buildCrewTicketReportSpendsScopeFilter({
+      userId,
+      isSuperAdmin: isSuperAdmin(role),
+      projectId,
+    });
+    if (!scopeFilter) {
+      const reportSpends = buildReportSpendsFromTickets([], { projectId });
+      return res.json({ reportSpends });
+    }
+
+    const tickets = await findCrewTicketRowsForReportSpends(scopeFilter);
+    const reportSpends = buildReportSpendsFromTickets(tickets, { projectId });
+
+    return res.json({ reportSpends });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching crew ticket report spends:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }

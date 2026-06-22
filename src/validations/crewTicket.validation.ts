@@ -87,6 +87,11 @@ export const listCrewTicketsQuerySchema = optionalPaginationQuerySchema.keys({
     .optional(),
 });
 
+/** GET /crew-ticket/spends — optional project scope for report spends analytics */
+export const reportSpendsQuerySchema = Joi.object({
+  project_id: objectId.optional(),
+});
+
 /** Time format HH:mm, date format YYYY-MM-DD */
 const timePattern = /^\d{2}:\d{2}$/;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
