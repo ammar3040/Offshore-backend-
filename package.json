@@ -4,9 +4,9 @@
   "description": "",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "nodemon --watch src --ext ts,js --exec ts-node src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "dev": "node init && nodemon --watch src --ext ts,js --exec ts-node src/index.ts",
+    "build": "node init && tsc",
+    "start": "node init && node dist/index.js",
     "install:chrome": "puppeteer browsers install chrome",
     "seed:superadmin": "ts-node scripts/seed-superadmin.ts",
     "seed:demo": "ts-node scripts/seed-demo-data.ts",

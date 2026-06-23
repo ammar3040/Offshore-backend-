@@ -7,19 +7,19 @@ export enum IdentityType {
 }
 
 export interface Passport {
-  passport_number: string;
-  issue_date: string;
+  passport_number?: string;
+  issue_date?: string;
   expiry_date: string;
-  issuing_country: string;
+  issuing_country?: string;
   passport_document: string;
 }
 
 export interface Identity {
-  identity_type: IdentityType;
-  identity_number: string;
-  issue_date: string;
-  expiry_date: string;
-  identity_document: string;
+  identity_type?: IdentityType;
+  identity_number?: string;
+  issue_date?: string;
+  expiry_date?: string;
+  identity_document?: string;
 }
 
 export interface CrewCertificate {
@@ -35,19 +35,19 @@ export interface Crew {
   createdBy?: mongoose.Types.ObjectId;
   firstname: string;
   lastname: string;
-  dateOfBirth: string;
-  nationality: string;
+  dateOfBirth?: string;
+  nationality?: string;
   gender: string;
   email: string;
   phone: string;
-  alternate_phone: string;
-  address: string;
-  city: string;
-  country: string;
-  postal_code: string;
+  alternate_phone?: string;
+  address?: string;
+  city?: string;
+  country?: string;
+  postal_code?: string;
   password: string; // hashed
   passport: Passport;
-  identity: Identity;
+  identity?: Identity;
   crew_certificate: CrewCertificate[];
   azerbaijan_vantage_number?: string;
   norwegian_d_number?: string;
@@ -56,6 +56,8 @@ export interface Crew {
   organization?: string;
   linkedin?: string;
   visa?: string;
+  rank?: string;
+  isAvailable?: boolean;
 }
 
 // Mongoose document type (has _id)
@@ -65,10 +67,10 @@ export interface CrewDocument extends Omit<Crew, "id">, Document {
 
 const passportSchema = new Schema<Passport>(
   {
-    passport_number: { type: String, required: true },
-    issue_date: { type: String, required: true },
+    passport_number: { type: String },
+    issue_date: { type: String },
     expiry_date: { type: String, required: true },
-    issuing_country: { type: String, required: true },
+    issuing_country: { type: String },
     passport_document: { type: String, required: true },
   },
   { _id: false }
@@ -76,11 +78,11 @@ const passportSchema = new Schema<Passport>(
 
 const identitySchema = new Schema<Identity>(
   {
-    identity_type: { type: String, enum: Object.values(IdentityType), required: true },
-    identity_number: { type: String, required: true },
-    issue_date: { type: String, required: true },
-    expiry_date: { type: String, required: true },
-    identity_document: { type: String, required: true },
+    identity_type: { type: String, enum: Object.values(IdentityType) },
+    identity_number: { type: String },
+    issue_date: { type: String },
+    expiry_date: { type: String },
+    identity_document: { type: String },
   },
   { _id: false }
 );
@@ -100,19 +102,19 @@ const crewSchema = new Schema<CrewDocument>(
     createdBy: { type: Schema.Types.ObjectId, ref: "Admin", required: false },
     firstname: { type: String, required: true },
     lastname: { type: String, required: true },
-    dateOfBirth: { type: String, required: true },
-    nationality: { type: String, required: true },
+    dateOfBirth: { type: String },
+    nationality: { type: String },
     gender: { type: String, required: true },
     email: { type: String, required: true, unique: true },
     phone: { type: String, required: true },
-    alternate_phone: { type: String, required: true },
-    address: { type: String, required: true },
-    city: { type: String, required: true },
-    country: { type: String, required: true },
-    postal_code: { type: String, required: true },
+    alternate_phone: { type: String },
+    address: { type: String },
+    city: { type: String },
+    country: { type: String },
+    postal_code: { type: String },
     password: { type: String, required: true, select: false },
     passport: { type: passportSchema, required: true },
-    identity: { type: identitySchema, required: true },
+    identity: { type: identitySchema, required: false },
     crew_certificate: { type: [crewCertificateSchema], default: [] },
     azerbaijan_vantage_number: { type: String },
     norwegian_d_number: { type: String },
@@ -121,6 +123,8 @@ const crewSchema = new Schema<CrewDocument>(
     organization: { type: String },
     linkedin: { type: String },
     visa: { type: String },
+    rank: { type: String },
+    isAvailable: { type: Boolean, default: true },
   },
   { timestamps: true }
 );
@@ -175,6 +179,8 @@ function toCrew(doc: CrewDocument): CrewPublic {
     organization: doc.organization,
     linkedin: doc.linkedin,
     visa: doc.visa,
+    rank: doc.rank,
+    isAvailable: doc.isAvailable !== false,
   };
 }
 

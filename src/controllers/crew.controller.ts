@@ -43,14 +43,17 @@ import {
 
 type CrewFormPayload = Omit<Crew, "id" | "password">;
 
-const FLAT_FIELDS = [
+const REQUIRED_FLAT_FIELDS = [
   "firstname",
   "lastname",
-  "dateOfBirth",
-  "nationality",
   "gender",
   "email",
   "phone",
+] as const;
+
+const OPTIONAL_FLAT_FIELDS = [
+  "dateOfBirth",
+  "nationality",
   "alternate_phone",
   "address",
   "city",
@@ -58,12 +61,7 @@ const FLAT_FIELDS = [
   "postal_code",
 ] as const;
 
-const PASSPORT_FIELDS = [
-  "passport_number",
-  "passport_issue_date",
-  "passport_expiry_date",
-  "passport_issuing_country",
-] as const;
+const FLAT_FIELDS = [...REQUIRED_FLAT_FIELDS, ...OPTIONAL_FLAT_FIELDS] as const;
 
 const IDENTITY_FIELDS = [
   "identity_type",
@@ -87,114 +85,114 @@ function hasRequiredFormFields(
   body: Record<string, unknown>,
   files: { passport_document?: Express.Multer.File[]; identity_document?: Express.Multer.File[]; certificate_document?: Express.Multer.File[] }
 ): { ok: true; data: CrewFormPayload } | { ok: false; message: string } {
-  for (const key of FLAT_FIELDS) {
+  for (const key of REQUIRED_FLAT_FIELDS) {
     if (!getString(body, key)) {
       return { ok: false, message: `Missing or invalid field: ${key}` };
     }
   }
-  for (const key of PASSPORT_FIELDS) {
-    if (!getString(body, key)) {
-      return { ok: false, message: `Missing or invalid field: ${key}` };
-    }
+
+  const passportExpiryDate = getString(body, "passport_expiry_date");
+  if (!passportExpiryDate) {
+    return { ok: false, message: "Missing or invalid field: passport_expiry_date" };
   }
-  for (const key of IDENTITY_FIELDS) {
-    if (!getString(body, key)) {
-      return { ok: false, message: `Missing or invalid field: ${key}` };
-    }
-  }
-  const certificatesJson = getString(body, "certificates");
-  const hasCertificatesArray = certificatesJson && certificatesJson.trim().length > 0;
-  if (!hasCertificatesArray) {
-    for (const key of CERTIFICATE_FIELDS) {
-      if (!getString(body, key)) {
-        return { ok: false, message: `Missing or invalid field: ${key}` };
-      }
-    }
-  }
-  const identityType = getString(body, "identity_type") as IdentityType | undefined;
-  if (!identityType || !Object.values(IdentityType).includes(identityType)) {
-    return { ok: false, message: "identity_type must be one of: national_id, driving_license, identity_number" };
-  }
-  // const password = getString(body, "password");
-  // if (!password || password.length < 6) {
-  //   return { ok: false, message: "password is required and must be at least 6 characters" };
-  // }
+
   const passportFile = files.passport_document?.[0];
-  const identityFile = files.identity_document?.[0];
-  const certificateFiles = files.certificate_document ?? [];
   if (!passportFile?.path) {
     return { ok: false, message: "passport_document file is required" };
   }
-  if (!identityFile?.path) {
-    return { ok: false, message: "identity_document file is required" };
-  }
-  if (certificateFiles.length === 0 || !certificateFiles[0]?.path) {
-    return { ok: false, message: "At least one certificate_document file is required" };
+
+  const identityType = getString(body, "identity_type") as IdentityType | undefined;
+  if (identityType && !Object.values(IdentityType).includes(identityType)) {
+    return { ok: false, message: "identity_type must be one of: national_id, driving_license, identity_number" };
   }
 
-  // Build certificates array: use "certificates" JSON if provided, else single cert from flat fields
-  let crewCertificates: Array<{ certificate_name: string; issue_date: string; expiry_date: string; certificate_document: string }>;
-  if (certificatesJson) {
-    try {
-      const parsed = JSON.parse(certificatesJson) as Array<{ certificate_name: string; issue_date: string; expiry_date: string }>;
-      if (!Array.isArray(parsed) || parsed.length !== certificateFiles.length) {
-        return { ok: false, message: "certificates array length must match number of certificate_document files" };
+  const identityFile = files.identity_document?.[0];
+  const certificateFiles = files.certificate_document ?? [];
+  const certificatesJson = getString(body, "certificates");
+  const hasCertificateInput =
+    certificatesJson ||
+    certificateFiles.length > 0 ||
+    CERTIFICATE_FIELDS.some((key) => getString(body, key));
+
+  let crewCertificates: Array<{ certificate_name: string; issue_date: string; expiry_date: string; certificate_document: string }> = [];
+  if (hasCertificateInput) {
+    if (certificatesJson) {
+      try {
+        const parsed = JSON.parse(certificatesJson) as Array<{ certificate_name: string; issue_date: string; expiry_date: string }>;
+        if (!Array.isArray(parsed) || parsed.length !== certificateFiles.length) {
+          return { ok: false, message: "certificates array length must match number of certificate_document files" };
+        }
+        if (certificateFiles.length === 0 || !certificateFiles[0]?.path) {
+          return { ok: false, message: "At least one certificate_document file is required when certificates are provided" };
+        }
+        crewCertificates = parsed.map((cert, i) => ({
+          certificate_name: cert.certificate_name || "",
+          issue_date: cert.issue_date,
+          expiry_date: cert.expiry_date,
+          certificate_document: certificateFiles[i]!.path!,
+        }));
+      } catch {
+        return { ok: false, message: "certificates must be a valid JSON array" };
       }
-      crewCertificates = parsed.map((cert, i) => ({
-        certificate_name: cert.certificate_name || "",
-        issue_date: cert.issue_date,
-        expiry_date: cert.expiry_date,
-        certificate_document: certificateFiles[i]!.path!,
-      }));
-    } catch {
-      return { ok: false, message: "certificates must be a valid JSON array" };
+    } else {
+      if (certificateFiles.length > 1) {
+        return { ok: false, message: "For multiple certificates, send 'certificates' as JSON array with certificate_name, issue_date, expiry_date for each" };
+      }
+      const certName = getString(body, "certificate_name");
+      const certIssue = getString(body, "certificate_issue_date");
+      const certExpiry = getString(body, "certificate_expiry_date");
+      if (!certName || !certIssue || !certExpiry || !certificateFiles[0]?.path) {
+        return {
+          ok: false,
+          message: "certificate_name, certificate_issue_date, certificate_expiry_date, and certificate_document are required when adding certificates",
+        };
+      }
+      crewCertificates = [{
+        certificate_name: certName,
+        issue_date: certIssue,
+        expiry_date: certExpiry,
+        certificate_document: certificateFiles[0]!.path!,
+      }];
     }
-  } else {
-    if (certificateFiles.length > 1) {
-      return { ok: false, message: "For multiple certificates, send 'certificates' as JSON array with certificate_name, issue_date, expiry_date for each" };
-    }
-    const certName = getString(body, "certificate_name");
-    const certIssue = getString(body, "certificate_issue_date");
-    const certExpiry = getString(body, "certificate_expiry_date");
-    if (!certName || !certIssue || !certExpiry) {
-      return { ok: false, message: "certificate_name, certificate_issue_date, certificate_expiry_date are required" };
-    }
-    crewCertificates = [{
-      certificate_name: certName,
-      issue_date: certIssue,
-      expiry_date: certExpiry,
-      certificate_document: certificateFiles[0]!.path!,
-    }];
   }
+
+  const hasIdentityInput =
+    identityType ||
+    identityFile?.path ||
+    IDENTITY_FIELDS.filter((key) => key !== "identity_type").some((key) => getString(body, key));
 
   const data: CrewFormPayload = {
     firstname: getString(body, "firstname")!,
     lastname: getString(body, "lastname")!,
-    dateOfBirth: getString(body, "dateOfBirth")!,
-    nationality: getString(body, "nationality")!,
     gender: getString(body, "gender")!,
     email: getString(body, "email")!,
     phone: getString(body, "phone")!,
-    alternate_phone: getString(body, "alternate_phone")!,
-    address: getString(body, "address")!,
-    city: getString(body, "city")!,
-    country: getString(body, "country")!,
-    postal_code: getString(body, "postal_code")!,
     passport: {
-      passport_number: getString(body, "passport_number")!,
-      issue_date: getString(body, "passport_issue_date")!,
-      expiry_date: getString(body, "passport_expiry_date")!,
-      issuing_country: getString(body, "passport_issuing_country")!,
+      expiry_date: passportExpiryDate,
       passport_document: passportFile.path,
-    },
-    identity: {
-      identity_type: identityType,
-      identity_number: getString(body, "identity_number")!,
-      issue_date: getString(body, "identity_issue_date")!,
-      expiry_date: getString(body, "identity_expiry_date")!,
-      identity_document: identityFile.path,
+      ...(getString(body, "passport_number") ? { passport_number: getString(body, "passport_number")! } : {}),
+      ...(getString(body, "passport_issue_date") ? { issue_date: getString(body, "passport_issue_date")! } : {}),
+      ...(getString(body, "passport_issuing_country") ? { issuing_country: getString(body, "passport_issuing_country")! } : {}),
     },
     crew_certificate: crewCertificates,
+    ...(getString(body, "dateOfBirth") ? { dateOfBirth: getString(body, "dateOfBirth")! } : {}),
+    ...(getString(body, "nationality") ? { nationality: getString(body, "nationality")! } : {}),
+    ...(getString(body, "alternate_phone") ? { alternate_phone: getString(body, "alternate_phone")! } : {}),
+    ...(getString(body, "address") ? { address: getString(body, "address")! } : {}),
+    ...(getString(body, "city") ? { city: getString(body, "city")! } : {}),
+    ...(getString(body, "country") ? { country: getString(body, "country")! } : {}),
+    ...(getString(body, "postal_code") ? { postal_code: getString(body, "postal_code")! } : {}),
+    ...(hasIdentityInput
+      ? {
+        identity: {
+          ...(identityType ? { identity_type: identityType } : {}),
+          ...(getString(body, "identity_number") ? { identity_number: getString(body, "identity_number")! } : {}),
+          ...(getString(body, "identity_issue_date") ? { issue_date: getString(body, "identity_issue_date")! } : {}),
+          ...(getString(body, "identity_expiry_date") ? { expiry_date: getString(body, "identity_expiry_date")! } : {}),
+          ...(identityFile?.path ? { identity_document: identityFile.path } : {}),
+        },
+      }
+      : {}),
     azerbaijan_vantage_number: getString(body, "azerbaijan_vantage_number"),
     norwegian_d_number: getString(body, "norwegian_d_number"),
     dawinci_number: getString(body, "dawinci_number"),
@@ -202,6 +200,7 @@ function hasRequiredFormFields(
     organization: getString(body, "organization"),
     linkedin: getString(body, "linkedin"),
     visa: getString(body, "visa"),
+    rank: getString(body, "rank"),
   };
   return { ok: true, data };
 }
@@ -251,7 +250,7 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       return {
         ...c,
         activeProjects,
-        signal: crewAvailabilitySignal(activeProjects),
+        signal: c.isAvailable === false ? "RED" : crewAvailabilitySignal(activeProjects),
       };
     });
     return res.json({ crew: crewWithSignal });
@@ -341,7 +340,7 @@ export async function getCrewAvailableForProject(
 
     const crew = (
       await Promise.all(unassignedCrewIds.map((id) => findCrewById(id.toString())))
-    ).filter((c): c is NonNullable<typeof c> => c != null);
+    ).filter((c): c is NonNullable<typeof c> => c != null && c.isAvailable !== false);
 
     return res.json({ crew });
   } catch (error) {
@@ -608,7 +607,7 @@ function buildCrewUpdateFromForm(
     }
   }
 
-  for (const key of ["azerbaijan_vantage_number", "norwegian_d_number", "dawinci_number", "vantage_number", "organization", "linkedin", "visa"]) {
+  for (const key of ["azerbaijan_vantage_number", "norwegian_d_number", "dawinci_number", "vantage_number", "organization", "linkedin", "visa", "rank"]) {
     const v = getString(body, key);
     if (v !== undefined) update[key] = v || undefined;
   }
@@ -661,11 +660,11 @@ export async function patchCrew(
       }
       if (formUpdate.identity) {
         formUpdate.identity = {
-          ...crew.identity,
+          ...(crew.identity ?? {}),
           ...formUpdate.identity,
           identity_document:
             (formUpdate.identity as { identity_document?: string }).identity_document ||
-            crew.identity.identity_document,
+            crew.identity?.identity_document,
         };
       }
       const certsToAdd = (formUpdate as { crew_certificate_add?: Array<{ certificate_name: string; issue_date: string; expiry_date: string; certificate_document: string }> }).crew_certificate_add;
@@ -821,6 +820,46 @@ export async function unassignCrewFromProject(
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error unassigning crew from project:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function updateCrewManualAvailabilityHandler(
+  req: AuthenticatedRequest & { params: { crew_id: string } },
+  res: Response
+) {
+  try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const { crew_id } = req.params;
+    const { isAvailable } = req.body as { isAvailable?: boolean };
+
+    if (isAvailable === undefined || typeof isAvailable !== "boolean") {
+      return res.status(400).json({ message: "isAvailable (boolean) is required in request body." });
+    }
+
+    const allowed = await crewOwnedByCaller(crew_id, userId, role);
+    if (!allowed) {
+      const crew = await findCrewById(crew_id);
+      if (!crew) {
+        return res.status(404).json({ message: "Crew not found." });
+      }
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
+    const updated = await updateCrew(crew_id, { isAvailable });
+    if (!updated) {
+      return res.status(500).json({ message: "Failed to update crew availability." });
+    }
+
+    return res.json({ message: "Crew availability updated successfully.", crew: updated });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error updating crew availability:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
