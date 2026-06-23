@@ -250,7 +250,7 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       return {
         ...c,
         activeProjects,
-        signal: crewAvailabilitySignal(activeProjects),
+        signal: c.isAvailable === false ? "RED" : crewAvailabilitySignal(activeProjects),
       };
     });
     return res.json({ crew: crewWithSignal });
@@ -340,7 +340,7 @@ export async function getCrewAvailableForProject(
 
     const crew = (
       await Promise.all(unassignedCrewIds.map((id) => findCrewById(id.toString())))
-    ).filter((c): c is NonNullable<typeof c> => c != null);
+    ).filter((c): c is NonNullable<typeof c> => c != null && c.isAvailable !== false);
 
     return res.json({ crew });
   } catch (error) {
@@ -820,6 +820,46 @@ export async function unassignCrewFromProject(
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error unassigning crew from project:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function updateCrewManualAvailabilityHandler(
+  req: AuthenticatedRequest & { params: { crew_id: string } },
+  res: Response
+) {
+  try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const { crew_id } = req.params;
+    const { isAvailable } = req.body as { isAvailable?: boolean };
+
+    if (isAvailable === undefined || typeof isAvailable !== "boolean") {
+      return res.status(400).json({ message: "isAvailable (boolean) is required in request body." });
+    }
+
+    const allowed = await crewOwnedByCaller(crew_id, userId, role);
+    if (!allowed) {
+      const crew = await findCrewById(crew_id);
+      if (!crew) {
+        return res.status(404).json({ message: "Crew not found." });
+      }
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
+    const updated = await updateCrew(crew_id, { isAvailable });
+    if (!updated) {
+      return res.status(500).json({ message: "Failed to update crew availability." });
+    }
+
+    return res.json({ message: "Crew availability updated successfully.", crew: updated });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error updating crew availability:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }

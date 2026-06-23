@@ -11,6 +11,7 @@ import {
   postCrew,
   resetCrewPassword,
   unassignCrewFromProject,
+  updateCrewManualAvailabilityHandler,
 } from "../controllers";
 import { authenticateAdmin, authenticateAdminOrSuperAdmin, authenticateCrew, authenticateSuperAdmin } from "../middleware/auth";
 import { validate } from "../middleware/validate";
@@ -57,6 +58,14 @@ router.patch(
   crewUpload,
   uploadCrewFilesToCloudinaryOptional,
   patchCrew
+);
+
+// update crew availability
+router.patch(
+  "/:crew_id/availability",
+  authenticateAdminOrSuperAdmin,
+  validate(crewIdParamSchema, "params"),
+  updateCrewManualAvailabilityHandler
 );
 
 // unassign/remove crew from project (must precede delete crew for route specificity)
