@@ -26,27 +26,27 @@ router.get(
   getCrewAvailabilities
 );
 
-// POST - crew only
+// POST - admin or crew
 router.post(
   "/",
-  authenticateCrew,
+  authenticateAdminOrCrew,
   validate(createAvailabilitySchema),
   addCrewAvailability
 );
 
-// PATCH - crew only
+// PATCH - admin or crew
 router.patch(
   "/:availability_id",
-  authenticateCrew,
+  authenticateAdminOrCrew,
   validate(availabilityIdParamSchema, "params"),
   validate(updateAvailabilitySchema),
   updateCrewAvailabilityHandler
 );
 
-// DELETE - crew only
+// DELETE - admin or crew
 router.delete(
   "/:availability_id",
-  authenticateCrew,
+  authenticateAdminOrCrew,
   validate(availabilityIdParamSchema, "params"),
   deleteCrewAvailabilityHandler
 );

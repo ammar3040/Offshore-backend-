@@ -4,6 +4,7 @@ import {
   createCrewAvailability,
   deleteCrewAvailability,
   findCrewAvailabilitiesByCrewId,
+  findCrewAvailabilityById,
   findCrewAvailabilityByIdAndCrewId,
   updateCrewAvailability,
 } from "../models/crewAvailability.model";
@@ -47,15 +48,34 @@ export async function getCrewAvailabilities(req: AuthenticatedRequest, res: Resp
 export async function addCrewAvailability(req: AuthenticatedRequest, res: Response) {
   try {
     const userId = req.user?.userId;
+    const role = req.user?.role;
 
-    if (!userId) {
+    if (!userId || !role) {
       return res.status(401).json({ message: "Authentication required." });
     }
 
-    const { from, to } = req.body as { from: Date; to: Date };
+    const { crew_id, from, to } = req.body as { crew_id?: string; from: Date; to: Date };
+
+    let targetCrewId: string;
+
+    if (role === "admin" || role === "superadmin") {
+      if (!crew_id) {
+        return res.status(400).json({ message: "crew_id is required for admin/superadmin." });
+      }
+      const allowed = await crewOwnedByCaller(crew_id, userId, role);
+      if (!allowed) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
+      targetCrewId = crew_id;
+    } else {
+      if (crew_id && crew_id !== userId) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
+      targetCrewId = userId;
+    }
 
     const availability = await createCrewAvailability({
-      crew_id: new mongoose.Types.ObjectId(userId),
+      crew_id: new mongoose.Types.ObjectId(targetCrewId),
       from: new Date(from),
       to: new Date(to),
     });
@@ -74,17 +94,30 @@ export async function addCrewAvailability(req: AuthenticatedRequest, res: Respon
 export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, res: Response) {
   try {
     const userId = req.user?.userId;
+    const role = req.user?.role;
 
-    if (!userId) {
+    if (!userId || !role) {
       return res.status(401).json({ message: "Authentication required." });
     }
 
     const { availability_id } = req.params as { availability_id: string };
     const { from, to } = req.body as { from?: Date; to?: Date };
 
-    const existing = await findCrewAvailabilityByIdAndCrewId(availability_id, userId);
+    const existing = await findCrewAvailabilityById(availability_id);
     if (!existing) {
-      return res.status(404).json({ message: "Availability not found or access denied." });
+      return res.status(404).json({ message: "Availability not found." });
+    }
+
+    const associatedCrewId = existing.crew_id.toString();
+    if (role === "admin" || role === "superadmin") {
+      const allowed = await crewOwnedByCaller(associatedCrewId, userId, role);
+      if (!allowed) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
+    } else {
+      if (associatedCrewId !== userId) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
     }
 
     const updateData: { from?: Date; to?: Date } = {};
@@ -112,16 +145,29 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
 export async function deleteCrewAvailabilityHandler(req: AuthenticatedRequest, res: Response) {
   try {
     const userId = req.user?.userId;
+    const role = req.user?.role;
 
-    if (!userId) {
+    if (!userId || !role) {
       return res.status(401).json({ message: "Authentication required." });
     }
 
     const { availability_id } = req.params as { availability_id: string };
 
-    const existing = await findCrewAvailabilityByIdAndCrewId(availability_id, userId);
+    const existing = await findCrewAvailabilityById(availability_id);
     if (!existing) {
-      return res.status(404).json({ message: "Availability not found or access denied." });
+      return res.status(404).json({ message: "Availability not found." });
+    }
+
+    const associatedCrewId = existing.crew_id.toString();
+    if (role === "admin" || role === "superadmin") {
+      const allowed = await crewOwnedByCaller(associatedCrewId, userId, role);
+      if (!allowed) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
+    } else {
+      if (associatedCrewId !== userId) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
     }
 
     const deleted = await deleteCrewAvailability(availability_id);

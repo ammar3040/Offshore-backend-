@@ -9,6 +9,7 @@ export const availabilityIdParamSchema = Joi.object({
 });
 
 export const createAvailabilitySchema = Joi.object({
+  crew_id: objectId.optional(),
   from: Joi.date().required().messages({
     "any.required": "from date is required",
     "date.base": "from must be a valid date",

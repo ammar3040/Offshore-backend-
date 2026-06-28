@@ -2394,13 +2394,16 @@ export async function searchAirports(req: import("express").Request, res: Respon
       }
     }
 
-    const { statusCode, data } = await fetchRiyaGetcity(query);
-
-    if (statusCode && statusCode >= 400) {
-      return res.status(502).json({ message: "Failed to fetch airports from Riya." });
+    let items: RiyaAirportItem[] = [];
+    try {
+      const { statusCode, data } = await fetchRiyaGetcity(query);
+      if (statusCode && statusCode < 400) {
+        items = normalizeRiyaAirports(data);
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("Riya airport search failed or credentials missing. Falling back to AirportRoutes:", (err as Error).message);
     }
-
-    let items = normalizeRiyaAirports(data);
 
     if (items.length === 0) {
       items = (await fetchAirportsFallback(query)).map((a) => ({

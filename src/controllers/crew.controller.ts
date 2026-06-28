@@ -16,7 +16,7 @@ import {
   IdentityType,
 } from "../models";
 import mongoose from "mongoose";
-import { findCrewAvailabilitiesByCrewId } from "../models/crewAvailability.model";
+import { findCrewAvailabilitiesByCrewId, CrewAvailabilityModel } from "../models/crewAvailability.model";
 import {
   findAcceptedInvitesByCrewId,
   findCrewIdsWithAcceptedInvitesOverlappingRange,
@@ -241,18 +241,52 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       return res.status(401).json({ message: "Authentication required." });
     }
 
-    const [crew, activeByCrewId] = await Promise.all([
-      isSuperAdmin(role) ? findAllCrew() : findAllCrew({ createdBy: userId }),
+    const crew = await (isSuperAdmin(role) ? findAllCrew() : findAllCrew({ createdBy: userId }));
+    const crewIds = crew.map((c) => c.id);
+
+    const [activeByCrewId, allAvails] = await Promise.all([
       findActiveProjectsGroupedByCrewId(),
+      CrewAvailabilityModel.find({ crew_id: { $in: crewIds } }),
     ]);
+
+    // Group availabilities by crew_id
+    const availsByCrewId = new Map<string, any[]>();
+    for (const av of allAvails) {
+      const cid = av.crew_id.toString();
+      if (!availsByCrewId.has(cid)) {
+        availsByCrewId.set(cid, []);
+      }
+      availsByCrewId.get(cid)!.push(av);
+    }
+
     const crewWithSignal = crew.map((c) => {
       const activeProjects = activeByCrewId.get(c.id) ?? [];
+      const memberAvails = availsByCrewId.get(c.id) ?? [];
+
+      let isAvailableTodayByCalendar = true;
+      if (memberAvails.length > 0) {
+        const now = new Date();
+        isAvailableTodayByCalendar = memberAvails.some((av) => {
+          const fromDate = new Date(av.from);
+          const toDate = new Date(av.to);
+          return now >= fromDate && now <= toDate;
+        });
+      }
+
+      let signal: "GREEN" | "ORANGE" | "RED" | "UNAVAILABLE";
+      if (c.isAvailable === false || !isAvailableTodayByCalendar) {
+        signal = "UNAVAILABLE";
+      } else {
+        signal = crewAvailabilitySignal(activeProjects);
+      }
+
       return {
         ...c,
         activeProjects,
-        signal: crewAvailabilitySignal(activeProjects),
+        signal,
       };
     });
+
     return res.json({ crew: crewWithSignal });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -283,9 +317,10 @@ export async function getCrewById(
       return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
     }
 
-    const [crew, assignedProjects] = await Promise.all([
+    const [crew, assignedProjects, memberAvails] = await Promise.all([
       findCrewById(crew_id),
       findProjectsByParticipantCrewId(crew_id),
+      findCrewAvailabilitiesByCrewId(crew_id),
     ]);
 
     if (!crew) {
@@ -296,7 +331,34 @@ export async function getCrewById(
       ? assignedProjects
       : assignedProjects.filter((p) => projectOwnedByProject(p, userId, role));
 
-    return res.json({ crew, projects });
+    const activeProjects = projects.filter((p) => {
+      const now = new Date();
+      return new Date(p.duration.startDate) < now && new Date(p.duration.endDate) > now;
+    });
+
+    let isAvailableTodayByCalendar = true;
+    if (memberAvails.length > 0) {
+      const now = new Date();
+      isAvailableTodayByCalendar = memberAvails.some((av) => {
+        const fromDate = new Date(av.from);
+        const toDate = new Date(av.to);
+        return now >= fromDate && now <= toDate;
+      });
+    }
+
+    let signal: "GREEN" | "ORANGE" | "RED" | "UNAVAILABLE";
+    if (crew.isAvailable === false || !isAvailableTodayByCalendar) {
+      signal = "UNAVAILABLE";
+    } else {
+      signal = crewAvailabilitySignal(activeProjects);
+    }
+
+    const crewObj = {
+      ...crew,
+      signal,
+    };
+
+    return res.json({ crew: crewObj, projects });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching crew:", error);
@@ -340,7 +402,7 @@ export async function getCrewAvailableForProject(
 
     const crew = (
       await Promise.all(unassignedCrewIds.map((id) => findCrewById(id.toString())))
-    ).filter((c): c is NonNullable<typeof c> => c != null);
+    ).filter((c): c is NonNullable<typeof c> => c != null && c.isAvailable !== false);
 
     return res.json({ crew });
   } catch (error) {
@@ -820,6 +882,46 @@ export async function unassignCrewFromProject(
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error unassigning crew from project:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function updateCrewManualAvailabilityHandler(
+  req: AuthenticatedRequest & { params: { crew_id: string } },
+  res: Response
+) {
+  try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const { crew_id } = req.params;
+    const { isAvailable } = req.body as { isAvailable?: boolean };
+
+    if (isAvailable === undefined || typeof isAvailable !== "boolean") {
+      return res.status(400).json({ message: "isAvailable (boolean) is required in request body." });
+    }
+
+    const allowed = await crewOwnedByCaller(crew_id, userId, role);
+    if (!allowed) {
+      const crew = await findCrewById(crew_id);
+      if (!crew) {
+        return res.status(404).json({ message: "Crew not found." });
+      }
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
+    const updated = await updateCrew(crew_id, { isAvailable });
+    if (!updated) {
+      return res.status(500).json({ message: "Failed to update crew availability." });
+    }
+
+    return res.json({ message: "Crew availability updated successfully.", crew: updated });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error updating crew availability:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }

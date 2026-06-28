@@ -20,7 +20,7 @@ const crewAvailabilitySchema = new Schema<CrewAvailabilityDocument>(
   { timestamps: true }
 );
 
-const CrewAvailabilityModel: Model<CrewAvailabilityDocument> =
+export const CrewAvailabilityModel: Model<CrewAvailabilityDocument> =
   mongoose.models.CrewAvailability ??
   mongoose.model<CrewAvailabilityDocument>("CrewAvailability", crewAvailabilitySchema);
 

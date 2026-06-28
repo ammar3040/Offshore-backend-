@@ -3,6 +3,7 @@ import cors, { CorsOptions } from "cors";
 import express, { Request, Response } from "express";
 import routes from "./routes";
 import { connectDB } from "./dbconnection";
+import { encryptionMiddleware } from "./middleware/encryption";
 
 const app = express();
 
@@ -28,7 +29,7 @@ const corsOptions: CorsOptions = {
   },
   credentials: true,
   methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-auth-token", "x-token", "X-Token"],
   exposedHeaders: ["Content-Disposition", "Content-Length", "Content-Type"],
   optionsSuccessStatus: 204,
 };
@@ -36,6 +37,7 @@ const corsOptions: CorsOptions = {
 app.use(cors(corsOptions));
 
 app.use(express.json());
+app.use(encryptionMiddleware);
 
 app.use(async (req, _res, next) => {
   if (req.method === "OPTIONS") {
