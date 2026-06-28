@@ -1785,6 +1785,7 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
             cancellationSurcharge: Math.round(localCancellationSurcharge),
           };
         });
+        
 
         const cashback = airlineIncentive > 0 ? airlineIncentive : localFlatCashback;
         const { fareBreakdown, ...flightWithoutFareBreakdown } = flight;
