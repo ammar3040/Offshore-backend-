@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import type { JwtPayload } from "../utils/jwt";
 import { findCrewDocumentById } from "../models/crew.model";
 import { findCrewTicketById } from "../models/crewTicket.model";
-import { findProjectById } from "../models/project.model";
+import { findProjectById, ProjectModel } from "../models/project.model";
 import type { Project } from "../models/project.model";
 import { findRigDocumentById } from "../models/rig.model";
 import { resolveProjectAdminId } from "../services/cancellation-debt";
@@ -60,9 +60,19 @@ export async function crewOwnedByCaller(
 ): Promise<boolean> {
   if (isSuperAdmin(role)) return true;
   const raw = await findCrewDocumentById(crewId);
-  if (!raw?.createdBy) return false;
+  if (!raw) return false;
+  if (!raw.createdBy) return true; // ALLOW if no creator (seeded/demo crew)
   const ownerId = raw.createdBy as mongoose.Types.ObjectId;
-  return ownerId.toString() === userId;
+  if (ownerId.toString() === userId) return true;
+
+  // Allow if enrolled in a project owned by this caller
+  const enrollment = await ProjectModel.findOne({
+    participants: new mongoose.Types.ObjectId(crewId),
+    createdBy: new mongoose.Types.ObjectId(userId)
+  });
+  if (enrollment) return true;
+
+  return false;
 }
 
 export async function allCrewOwnedByCaller(

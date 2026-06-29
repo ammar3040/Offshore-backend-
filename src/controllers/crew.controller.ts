@@ -259,26 +259,39 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       availsByCrewId.get(cid)!.push(av);
     }
 
-    const crewWithSignal = crew.map((c) => {
-      const activeProjects = activeByCrewId.get(c.id) ?? [];
+    // Parse query params for date filtering
+    const { availabilityStart, availabilityEnd } = req.query as {
+      availabilityStart?: string;
+      availabilityEnd?: string;
+    };
+
+    let startSearch: Date;
+    let endSearch: Date;
+
+    if (availabilityStart) {
+      startSearch = new Date(availabilityStart);
+      endSearch = availabilityEnd ? new Date(availabilityEnd) : new Date(availabilityStart);
+    } else {
+      // Default: show today's available crew
+      const today = new Date();
+      startSearch = new Date(today.setHours(0, 0, 0, 0));
+      endSearch = new Date(today.setHours(23, 59, 59, 999));
+    }
+
+    const filteredCrew = crew.filter((c) => {
+      if (c.isAvailable === false) return false;
       const memberAvails = availsByCrewId.get(c.id) ?? [];
+      if (memberAvails.length === 0) return false;
+      return memberAvails.some((av) => {
+        const fromDate = new Date(av.from);
+        const toDate = new Date(av.to);
+        return fromDate <= endSearch && toDate >= startSearch;
+      });
+    });
 
-      let isAvailableTodayByCalendar = true;
-      if (memberAvails.length > 0) {
-        const now = new Date();
-        isAvailableTodayByCalendar = memberAvails.some((av) => {
-          const fromDate = new Date(av.from);
-          const toDate = new Date(av.to);
-          return now >= fromDate && now <= toDate;
-        });
-      }
-
-      let signal: "GREEN" | "ORANGE" | "RED" | "UNAVAILABLE";
-      if (c.isAvailable === false || !isAvailableTodayByCalendar) {
-        signal = "UNAVAILABLE";
-      } else {
-        signal = crewAvailabilitySignal(activeProjects);
-      }
+    const crewWithSignal = filteredCrew.map((c) => {
+      const activeProjects = activeByCrewId.get(c.id) ?? [];
+      const signal = crewAvailabilitySignal(activeProjects);
 
       return {
         ...c,
@@ -886,42 +899,3 @@ export async function unassignCrewFromProject(
   }
 }
 
-export async function updateCrewManualAvailabilityHandler(
-  req: AuthenticatedRequest & { params: { crew_id: string } },
-  res: Response
-) {
-  try {
-    const userId = req.user?.userId;
-    const role = req.user?.role;
-    if (!userId || !role) {
-      return res.status(401).json({ message: "Authentication required." });
-    }
-
-    const { crew_id } = req.params;
-    const { isAvailable } = req.body as { isAvailable?: boolean };
-
-    if (isAvailable === undefined || typeof isAvailable !== "boolean") {
-      return res.status(400).json({ message: "isAvailable (boolean) is required in request body." });
-    }
-
-    const allowed = await crewOwnedByCaller(crew_id, userId, role);
-    if (!allowed) {
-      const crew = await findCrewById(crew_id);
-      if (!crew) {
-        return res.status(404).json({ message: "Crew not found." });
-      }
-      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
-    }
-
-    const updated = await updateCrew(crew_id, { isAvailable });
-    if (!updated) {
-      return res.status(500).json({ message: "Failed to update crew availability." });
-    }
-
-    return res.json({ message: "Crew availability updated successfully.", crew: updated });
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error("Error updating crew availability:", error);
-    return res.status(500).json({ message: "Internal server error." });
-  }
-}

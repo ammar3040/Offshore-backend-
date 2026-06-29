@@ -7,6 +7,7 @@ import {
   findCrewAvailabilityById,
   findCrewAvailabilityByIdAndCrewId,
   updateCrewAvailability,
+  CrewAvailabilityModel,
 } from "../models/crewAvailability.model";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import { ACCESS_DENIED_MESSAGE, crewOwnedByCaller } from "../lib/resource-access";
@@ -74,10 +75,30 @@ export async function addCrewAvailability(req: AuthenticatedRequest, res: Respon
       targetCrewId = userId;
     }
 
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+
+    if (toDate <= fromDate) {
+      return res.status(400).json({ message: "to date must be after from date." });
+    }
+
+    // Check for overlapping availability
+    const overlap = await CrewAvailabilityModel.findOne({
+      crew_id: new mongoose.Types.ObjectId(targetCrewId),
+      from: { $lte: toDate },
+      to: { $gte: fromDate },
+    });
+
+    if (overlap) {
+      return res.status(400).json({
+        message: `Overlapping availability exists: from ${new Date(overlap.from).toISOString().split('T')[0]} to ${new Date(overlap.to).toISOString().split('T')[0]}. Please select a date range after or before this window.`,
+      });
+    }
+
     const availability = await createCrewAvailability({
       crew_id: new mongoose.Types.ObjectId(targetCrewId),
-      from: new Date(from),
-      to: new Date(to),
+      from: fromDate,
+      to: toDate,
     });
 
     return res.status(201).json({
@@ -108,7 +129,10 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
       return res.status(404).json({ message: "Availability not found." });
     }
 
-    const associatedCrewId = existing.crew_id.toString();
+    const associatedCrewId =
+      typeof existing.crew_id === "object" && existing.crew_id && "_id" in existing.crew_id
+        ? (existing.crew_id as any)._id.toString()
+        : (existing.crew_id as any).toString();
     if (role === "admin" || role === "superadmin") {
       const allowed = await crewOwnedByCaller(associatedCrewId, userId, role);
       if (!allowed) {
@@ -128,6 +152,20 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
     const effectiveTo = updateData.to ?? existing.to;
     if (new Date(effectiveTo) <= new Date(effectiveFrom)) {
       return res.status(400).json({ message: "to date must be after from date." });
+    }
+
+    // Check for overlapping availability (excluding current)
+    const overlap = await CrewAvailabilityModel.findOne({
+      _id: { $ne: new mongoose.Types.ObjectId(availability_id) },
+      crew_id: new mongoose.Types.ObjectId(associatedCrewId),
+      from: { $lte: new Date(effectiveTo) },
+      to: { $gte: new Date(effectiveFrom) },
+    });
+
+    if (overlap) {
+      return res.status(400).json({
+        message: `Overlapping availability exists: from ${new Date(overlap.from).toISOString().split('T')[0]} to ${new Date(overlap.to).toISOString().split('T')[0]}. Please select a date range after or before this window.`,
+      });
     }
 
     const availability = await updateCrewAvailability(availability_id, updateData);
@@ -158,7 +196,10 @@ export async function deleteCrewAvailabilityHandler(req: AuthenticatedRequest, r
       return res.status(404).json({ message: "Availability not found." });
     }
 
-    const associatedCrewId = existing.crew_id.toString();
+    const associatedCrewId =
+      typeof existing.crew_id === "object" && existing.crew_id && "_id" in existing.crew_id
+        ? (existing.crew_id as any)._id.toString()
+        : (existing.crew_id as any).toString();
     if (role === "admin" || role === "superadmin") {
       const allowed = await crewOwnedByCaller(associatedCrewId, userId, role);
       if (!allowed) {
