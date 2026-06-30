@@ -15,3 +15,7 @@
 /cache
 /scripts
 .cursor/
+
+# Git Backups
+.git-vishjit/
+.git.backup/
