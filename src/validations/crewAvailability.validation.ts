@@ -14,11 +14,12 @@ export const createAvailabilitySchema = Joi.object({
     "any.required": "from date is required",
     "date.base": "from must be a valid date",
   }),
-  to: Joi.date().greater(Joi.ref("from")).required().messages({
+  to: Joi.date().min(Joi.ref("from")).required().messages({
     "any.required": "to date is required",
     "date.base": "to must be a valid date",
-    "date.greater": "to must be after from",
+    "date.min": "to must be on or after from",
   }),
+  isAvailable: Joi.boolean().optional().default(true),
 });
 
 export const updateAvailabilitySchema = Joi.object({

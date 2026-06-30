@@ -5,10 +5,12 @@ export interface CrewAvailability {
   crew_id: mongoose.Types.ObjectId;
   from: Date;
   to: Date;
+  isAvailable?: boolean;
 }
 
 export interface CrewAvailabilityDocument extends Omit<CrewAvailability, "id">, Document {
   _id: mongoose.Types.ObjectId;
+  isAvailable?: boolean;
 }
 
 const crewAvailabilitySchema = new Schema<CrewAvailabilityDocument>(
@@ -16,6 +18,7 @@ const crewAvailabilitySchema = new Schema<CrewAvailabilityDocument>(
     crew_id: { type: Schema.Types.ObjectId, ref: "Crew", required: true },
     from: { type: Date, required: true },
     to: { type: Date, required: true },
+    isAvailable: { type: Boolean, default: true },
   },
   { timestamps: true }
 );
@@ -30,6 +33,7 @@ function toCrewAvailability(doc: CrewAvailabilityDocument): CrewAvailability {
     crew_id: doc.crew_id,
     from: doc.from,
     to: doc.to,
+    isAvailable: doc.isAvailable !== false,
   };
 }
 

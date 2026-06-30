@@ -233,6 +233,21 @@ function crewAvailabilitySignal(activeProjects: Project[]): "GREEN" | "ORANGE" |
   return "RED";
 }
 
+function parseAsUTCDate(dateStr: string | Date): Date {
+  const d = new Date(dateStr);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+}
+
+function addUTCDays(date: Date, days: number): Date {
+  const result = new Date(date);
+  result.setUTCDate(result.getUTCDate() + days);
+  return result;
+}
+
+function toUTCDateString(date: Date): string {
+  return date.toISOString().split("T")[0];
+}
+
 export async function getCrew(req: AuthenticatedRequest, res: Response) {
   try {
     const userId = req.user?.userId;
@@ -260,34 +275,91 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
     }
 
     // Parse query params for date filtering
-    const { availabilityStart, availabilityEnd } = req.query as {
+    const { availabilityStart, availabilityEnd, type } = req.query as {
       availabilityStart?: string;
       availabilityEnd?: string;
+      type?: "available" | "unavailable";
     };
 
-    let startSearch: Date;
-    let endSearch: Date;
+    let filteredCrew = crew;
 
     if (availabilityStart) {
-      startSearch = new Date(availabilityStart);
-      endSearch = availabilityEnd ? new Date(availabilityEnd) : new Date(availabilityStart);
-    } else {
-      // Default: show today's available crew
-      const today = new Date();
-      startSearch = new Date(today.setHours(0, 0, 0, 0));
-      endSearch = new Date(today.setHours(23, 59, 59, 999));
-    }
+      const startSearch = parseAsUTCDate(availabilityStart);
+      const endSearch = availabilityEnd ? parseAsUTCDate(availabilityEnd) : parseAsUTCDate(availabilityStart);
+      const searchType = type || "available";
 
-    const filteredCrew = crew.filter((c) => {
-      if (c.isAvailable === false) return false;
-      const memberAvails = availsByCrewId.get(c.id) ?? [];
-      if (memberAvails.length === 0) return false;
-      return memberAvails.some((av) => {
-        const fromDate = new Date(av.from);
-        const toDate = new Date(av.to);
-        return fromDate <= endSearch && toDate >= startSearch;
+      // Calculate the total number of days in the search range (inclusive)
+      const searchRangeDays = Math.round(
+        (endSearch.getTime() - startSearch.getTime()) / 86_400_000
+      ) + 1;
+
+      filteredCrew = crew.filter((c) => {
+        const memberAvails = availsByCrewId.get(c.id) ?? [];
+
+        if (searchType === "available") {
+          // Build a set of all days in the search range (default is available)
+          const coveredDays = new Set<string>();
+          let d = new Date(startSearch);
+          const endD = new Date(endSearch);
+          while (d <= endD) {
+            coveredDays.add(toUTCDateString(d));
+            d = addUTCDays(d, 1);
+          }
+
+          // Remove any days that are covered by unavailable records
+          const unavailableRecords = memberAvails.filter(
+            (av) => av.isAvailable === false
+          );
+          for (const av of unavailableRecords) {
+            const avFrom = parseAsUTCDate(av.from);
+            const avTo = parseAsUTCDate(av.to);
+
+            const overlapStart = avFrom > startSearch ? avFrom : startSearch;
+            const overlapEnd = avTo < endSearch ? avTo : endSearch;
+
+            if (overlapStart <= overlapEnd) {
+              let dOverlap = new Date(overlapStart);
+              const endDOverlap = new Date(overlapEnd);
+              while (dOverlap <= endDOverlap) {
+                coveredDays.delete(toUTCDateString(dOverlap));
+                dOverlap = addUTCDays(dOverlap, 1);
+              }
+            }
+          }
+
+          // Show crew with at least 1 available day in the search range
+          (c as Record<string, unknown>).availableDays = coveredDays.size;
+          return coveredDays.size >= 1;
+        } else {
+          // searchType === "unavailable"
+          // Collect unavailable records that overlap
+          const unavailableRecords = memberAvails.filter(
+            (av) => av.isAvailable === false
+          );
+
+          const coveredDays = new Set<string>();
+          for (const av of unavailableRecords) {
+            const avFrom = parseAsUTCDate(av.from);
+            const avTo = parseAsUTCDate(av.to);
+
+            const overlapStart = avFrom > startSearch ? avFrom : startSearch;
+            const overlapEnd = avTo < endSearch ? avTo : endSearch;
+
+            if (overlapStart <= overlapEnd) {
+              let d = new Date(overlapStart);
+              const endD = new Date(overlapEnd);
+              while (d <= endD) {
+                coveredDays.add(toUTCDateString(d));
+                d = addUTCDays(d, 1);
+              }
+            }
+          }
+
+          (c as Record<string, unknown>).availableDays = coveredDays.size;
+          return coveredDays.size >= 1;
+        }
       });
-    });
+    }
 
     const crewWithSignal = filteredCrew.map((c) => {
       const activeProjects = activeByCrewId.get(c.id) ?? [];
@@ -350,17 +422,28 @@ export async function getCrewById(
     });
 
     let isAvailableTodayByCalendar = true;
-    if (memberAvails.length > 0) {
-      const now = new Date();
-      isAvailableTodayByCalendar = memberAvails.some((av) => {
-        const fromDate = new Date(av.from);
-        const toDate = new Date(av.to);
-        return now >= fromDate && now <= toDate;
-      });
+    const now = new Date();
+    const hasUnavailableToday = memberAvails.some((av) => {
+      const fromDate = new Date(av.from);
+      const toDate = new Date(av.to);
+      return now >= fromDate && now <= toDate && av.isAvailable === false;
+    });
+
+    if (hasUnavailableToday) {
+      isAvailableTodayByCalendar = false;
+    } else {
+      const availableRecords = memberAvails.filter((av) => av.isAvailable !== false);
+      if (availableRecords.length > 0) {
+        isAvailableTodayByCalendar = availableRecords.some((av) => {
+          const fromDate = new Date(av.from);
+          const toDate = new Date(av.to);
+          return now >= fromDate && now <= toDate;
+        });
+      }
     }
 
     let signal: "GREEN" | "ORANGE" | "RED" | "UNAVAILABLE";
-    if (crew.isAvailable === false || !isAvailableTodayByCalendar) {
+    if (!isAvailableTodayByCalendar) {
       signal = "UNAVAILABLE";
     } else {
       signal = crewAvailabilitySignal(activeProjects);
@@ -415,7 +498,7 @@ export async function getCrewAvailableForProject(
 
     const crew = (
       await Promise.all(unassignedCrewIds.map((id) => findCrewById(id.toString())))
-    ).filter((c): c is NonNullable<typeof c> => c != null && c.isAvailable !== false);
+    ).filter((c): c is NonNullable<typeof c> => c != null);
 
     return res.json({ crew });
   } catch (error) {

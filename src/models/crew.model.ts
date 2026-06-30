@@ -57,7 +57,6 @@ export interface Crew {
   linkedin?: string;
   visa?: string;
   rank?: string;
-  isAvailable?: boolean;
 }
 
 // Mongoose document type (has _id)
@@ -124,7 +123,6 @@ const crewSchema = new Schema<CrewDocument>(
     linkedin: { type: String },
     visa: { type: String },
     rank: { type: String },
-    isAvailable: { type: Boolean, default: true },
   },
   { timestamps: true }
 );
@@ -180,7 +178,6 @@ function toCrew(doc: CrewDocument): CrewPublic {
     linkedin: doc.linkedin,
     visa: doc.visa,
     rank: doc.rank,
-    isAvailable: doc.isAvailable !== false,
   };
 }
 

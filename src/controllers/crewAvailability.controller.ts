@@ -55,7 +55,7 @@ export async function addCrewAvailability(req: AuthenticatedRequest, res: Respon
       return res.status(401).json({ message: "Authentication required." });
     }
 
-    const { crew_id, from, to } = req.body as { crew_id?: string; from: Date; to: Date };
+    const { crew_id, from, to, isAvailable } = req.body as { crew_id?: string; from: Date; to: Date; isAvailable?: boolean };
 
     let targetCrewId: string;
 
@@ -78,11 +78,12 @@ export async function addCrewAvailability(req: AuthenticatedRequest, res: Respon
     const fromDate = new Date(from);
     const toDate = new Date(to);
 
-    if (toDate <= fromDate) {
-      return res.status(400).json({ message: "to date must be after from date." });
+    if (toDate < fromDate) {
+      return res.status(400).json({ message: "to date must be on or after from date." });
     }
 
-    // Check for overlapping availability
+    // Check for overlapping ranges of any type
+    // (a date range cannot be both available and unavailable)
     const overlap = await CrewAvailabilityModel.findOne({
       crew_id: new mongoose.Types.ObjectId(targetCrewId),
       from: { $lte: toDate },
@@ -90,8 +91,9 @@ export async function addCrewAvailability(req: AuthenticatedRequest, res: Respon
     });
 
     if (overlap) {
+      const typeLabel = overlap.isAvailable !== false ? "availability" : "unavailability";
       return res.status(400).json({
-        message: `Overlapping availability exists: from ${new Date(overlap.from).toISOString().split('T')[0]} to ${new Date(overlap.to).toISOString().split('T')[0]}. Please select a date range after or before this window.`,
+        message: `Overlapping ${typeLabel} exists: from ${new Date(overlap.from).toISOString().split('T')[0]} to ${new Date(overlap.to).toISOString().split('T')[0]}. Please select a date range after or before this window.`,
       });
     }
 
@@ -99,6 +101,7 @@ export async function addCrewAvailability(req: AuthenticatedRequest, res: Respon
       crew_id: new mongoose.Types.ObjectId(targetCrewId),
       from: fromDate,
       to: toDate,
+      isAvailable: isAvailable !== false,
     });
 
     return res.status(201).json({
@@ -150,11 +153,11 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
 
     const effectiveFrom = updateData.from ?? existing.from;
     const effectiveTo = updateData.to ?? existing.to;
-    if (new Date(effectiveTo) <= new Date(effectiveFrom)) {
-      return res.status(400).json({ message: "to date must be after from date." });
+    if (new Date(effectiveTo) < new Date(effectiveFrom)) {
+      return res.status(400).json({ message: "to date must be on or after from date." });
     }
 
-    // Check for overlapping availability (excluding current)
+    // Check for overlapping ranges of any type (excluding current)
     const overlap = await CrewAvailabilityModel.findOne({
       _id: { $ne: new mongoose.Types.ObjectId(availability_id) },
       crew_id: new mongoose.Types.ObjectId(associatedCrewId),
@@ -163,8 +166,9 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
     });
 
     if (overlap) {
+      const typeLabel = overlap.isAvailable !== false ? "availability" : "unavailability";
       return res.status(400).json({
-        message: `Overlapping availability exists: from ${new Date(overlap.from).toISOString().split('T')[0]} to ${new Date(overlap.to).toISOString().split('T')[0]}. Please select a date range after or before this window.`,
+        message: `Overlapping ${typeLabel} exists: from ${new Date(overlap.from).toISOString().split('T')[0]} to ${new Date(overlap.to).toISOString().split('T')[0]}. Please select a date range after or before this window.`,
       });
     }
 
