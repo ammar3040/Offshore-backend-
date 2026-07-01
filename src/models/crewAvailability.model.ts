@@ -79,7 +79,7 @@ export async function deleteCrewAvailability(id: string): Promise<boolean> {
   return !!result;
 }
 
-/** Find distinct crew_ids whose availability overlaps with the given date range */
+/** Find distinct crew_ids whose availability (isAvailable=true) overlaps with the given date range */
 export async function findCrewIdsWithAvailabilityOverlappingRange(
   startDate: Date,
   endDate: Date
@@ -87,6 +87,7 @@ export async function findCrewIdsWithAvailabilityOverlappingRange(
   const docs = await CrewAvailabilityModel.find({
     from: { $lte: endDate },
     to: { $gte: startDate },
+    isAvailable: { $ne: false },
   }).distinct("crew_id");
   return docs;
 }

@@ -288,25 +288,36 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       const endSearch = availabilityEnd ? parseAsUTCDate(availabilityEnd) : parseAsUTCDate(availabilityStart);
       const searchType = type || "available";
 
-      // Calculate the total number of days in the search range (inclusive)
-      const searchRangeDays = Math.round(
-        (endSearch.getTime() - startSearch.getTime()) / 86_400_000
-      ) + 1;
-
       filteredCrew = crew.filter((c) => {
         const memberAvails = availsByCrewId.get(c.id) ?? [];
 
         if (searchType === "available") {
-          // Build a set of all days in the search range (default is available)
-          const coveredDays = new Set<string>();
-          let d = new Date(startSearch);
-          const endD = new Date(endSearch);
-          while (d <= endD) {
-            coveredDays.add(toUTCDateString(d));
-            d = addUTCDays(d, 1);
+          // Step 1: Build available days ONLY from explicit isAvailable=true records
+          // that overlap the search range. Crew with no availability records get 0 days.
+          const availableDays = new Set<string>();
+          const availableRecords = memberAvails.filter(
+            (av) => av.isAvailable !== false
+          );
+
+          for (const av of availableRecords) {
+            const avFrom = parseAsUTCDate(av.from);
+            const avTo = parseAsUTCDate(av.to);
+
+            // Calculate overlap between this record and the search range
+            const overlapStart = avFrom > startSearch ? avFrom : startSearch;
+            const overlapEnd = avTo < endSearch ? avTo : endSearch;
+
+            if (overlapStart <= overlapEnd) {
+              let d = new Date(overlapStart);
+              const endD = new Date(overlapEnd);
+              while (d <= endD) {
+                availableDays.add(toUTCDateString(d));
+                d = addUTCDays(d, 1);
+              }
+            }
           }
 
-          // Remove any days that are covered by unavailable records
+          // Step 2: Remove any days that are covered by unavailable records
           const unavailableRecords = memberAvails.filter(
             (av) => av.isAvailable === false
           );
@@ -321,15 +332,15 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
               let dOverlap = new Date(overlapStart);
               const endDOverlap = new Date(overlapEnd);
               while (dOverlap <= endDOverlap) {
-                coveredDays.delete(toUTCDateString(dOverlap));
+                availableDays.delete(toUTCDateString(dOverlap));
                 dOverlap = addUTCDays(dOverlap, 1);
               }
             }
           }
 
-          // Show crew with at least 1 available day in the search range
-          (c as Record<string, unknown>).availableDays = coveredDays.size;
-          return coveredDays.size >= 1;
+          // Only include crew that have at least 1 explicitly available day in range
+          (c as Record<string, unknown>).availableDays = availableDays.size;
+          return availableDays.size >= 1;
         } else {
           // searchType === "unavailable"
           // Collect unavailable records that overlap
