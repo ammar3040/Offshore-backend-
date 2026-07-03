@@ -61,7 +61,7 @@ async function seed() {
   const superadminDoc = await SuperAdmin.create({
     firstname: "Super",
     lastname: "Admin",
-    email: "superadmin@a.com",
+    email: "superadmin@yopmail.com",
     password: hashedPassword,
     phone: "+1112223333",
     markup: 75,
@@ -76,7 +76,7 @@ async function seed() {
   const adminDoc = await Admin.create({
     firstname: "Admin",
     lastname: "User",
-    email: "admin@a.com",
+    email: "marine-admin@yopmail.com",
     password: hashedPassword,
     phone: "+9876543210",
     balance: 500000,
@@ -128,66 +128,235 @@ async function seed() {
   ];
   const organizations = ["Offshore Marine Services", "Statoil Services", "Deepwater Partners", "Apex Drilling"];
 
-  const crewDataList = [];
-  for (let i = 1; i <= 12; i++) {
-    const rank = ranks[i - 1];
-    const nationality = nationalities[i % nationalities.length];
-    const org = organizations[i % organizations.length];
+  const crewDetails = [
+    {
+      firstname: "John",
+      lastname: "Smith",
+      preferred_rating: "AAA",
+      primary_bop_oem: "Cameron",
+      secondary_skills: ["Tubing", "Controls"],
+      current_status: "Available",
+      last_worked: new Date("2026-05-10"),
+      visa_details: { visa_country: "Norway", visa_issue_date: "2024-01-01", visa_expiry_date: "2028-01-01" },
+      passport: { expiry_date: "2030-01-01", passport_number: "PP800001", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2020-01-01" },
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2024-01-10", expiry_date: "2028-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" },
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2025-02-15", expiry_date: "2027-02-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }
+      ]
+    },
+    {
+      firstname: "Mark",
+      lastname: "Jones",
+      preferred_rating: "AA",
+      primary_bop_oem: "NOV",
+      secondary_skills: ["Hydraulics"],
+      current_status: "Offered",
+      last_worked: new Date("2026-04-15"),
+      visa_details: { visa_country: "USA", visa_issue_date: "2023-01-01", visa_expiry_date: "2027-01-01" },
+      passport: { expiry_date: "2025-01-01", passport_number: "PP800002", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2015-01-01" }, // Expired Passport
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2024-01-10", expiry_date: "2028-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" },
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2025-02-15", expiry_date: "2027-02-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }
+      ]
+    },
+    {
+      firstname: "Ahmed",
+      lastname: "Ali",
+      preferred_rating: "A",
+      primary_bop_oem: "GE",
+      secondary_skills: ["Electrical", "Fiber Optics"],
+      current_status: "Confirmed",
+      last_worked: new Date("2026-06-01"),
+      visa_details: { visa_country: "Azerbaijan", visa_issue_date: "2023-01-01", visa_expiry_date: "2025-06-01" }, // Expired Visa
+      passport: { expiry_date: "2032-01-01", passport_number: "PP800003", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2022-01-01" },
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2024-01-10", expiry_date: "2028-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" },
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2025-02-15", expiry_date: "2027-02-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }
+      ]
+    },
+    {
+      firstname: "Steve",
+      lastname: "Brown",
+      preferred_rating: "AAA",
+      primary_bop_oem: "Cameron",
+      secondary_skills: ["Subsea Gate Valves"],
+      current_status: "On assignment for us",
+      last_worked: new Date("2026-06-20"),
+      visa_details: { visa_country: "UK", visa_issue_date: "2024-01-01", visa_expiry_date: "2029-01-01" },
+      passport: { expiry_date: "2031-01-01", passport_number: "PP800004", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2021-01-01" },
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2020-01-10", expiry_date: "2025-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }, // Expired BOSIET
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2025-02-15", expiry_date: "2027-02-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }
+      ]
+    },
+    {
+      firstname: "Sarah",
+      lastname: "Connor",
+      preferred_rating: "AA",
+      primary_bop_oem: "NOV",
+      secondary_skills: ["Accumulator Safety"],
+      current_status: "Offshore (Competitor)",
+      last_worked: new Date("2026-05-01"),
+      visa_details: { visa_country: "Norway", visa_issue_date: "2024-01-01", visa_expiry_date: "2028-01-01" },
+      passport: { expiry_date: "2032-01-01", passport_number: "PP800005", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2022-01-01" },
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2024-01-10", expiry_date: "2028-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" },
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2023-05-15", expiry_date: "2025-05-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" } // Expired Medical
+      ]
+    },
+    {
+      firstname: "David",
+      lastname: "Williams",
+      preferred_rating: "None",
+      primary_bop_oem: "Other",
+      secondary_skills: ["General Mechanical"],
+      current_status: "Holiday / Not Available",
+      last_worked: new Date("2026-03-10"),
+      visa_details: { visa_country: "Brazil", visa_issue_date: "2024-01-01", visa_expiry_date: "2028-01-01" },
+      passport: { expiry_date: "2033-01-01", passport_number: "PP800006", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2023-01-01" },
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2024-01-10", expiry_date: "2028-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" },
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2025-02-15", expiry_date: "2027-02-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }
+      ]
+    },
+    {
+      firstname: "Elena",
+      lastname: "Rostova",
+      preferred_rating: "None",
+      primary_bop_oem: "GE",
+      secondary_skills: ["Controls Troubleshooting"],
+      current_status: "Unknown / Inactive",
+      last_worked: new Date("2025-12-01"),
+      visa_details: { visa_country: "Azerbaijan", visa_issue_date: "2024-01-01", visa_expiry_date: "2028-01-01" },
+      passport: { expiry_date: "2030-01-01", passport_number: "PP800007", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2020-01-01" },
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2024-01-10", expiry_date: "2028-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" },
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2025-02-15", expiry_date: "2027-02-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }
+      ]
+    },
+    {
+      firstname: "Rajesh",
+      lastname: "Kumar",
+      preferred_rating: "AAA",
+      primary_bop_oem: "Cameron",
+      secondary_skills: ["Choke Manifolds"],
+      current_status: "Offshore (Competitor)",
+      last_worked: new Date("2026-06-15"),
+      visa_details: { visa_country: "Angola", visa_issue_date: "2024-01-01", visa_expiry_date: "2028-01-01" },
+      passport: { expiry_date: "2032-01-01", passport_number: "PP800008", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2022-01-01" },
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2024-01-10", expiry_date: "2028-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" },
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2025-02-15", expiry_date: "2027-02-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }
+      ]
+    },
+    {
+      firstname: "Michael",
+      lastname: "Chang",
+      preferred_rating: "AA",
+      primary_bop_oem: "NOV",
+      secondary_skills: ["BOP Stack Control"],
+      current_status: "Offshore (Competitor)",
+      last_worked: new Date("2026-05-20"),
+      visa_details: { visa_country: "USA", visa_issue_date: "2024-01-01", visa_expiry_date: "2028-01-01" },
+      passport: { expiry_date: "2031-01-01", passport_number: "PP800009", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2021-01-01" },
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2024-01-10", expiry_date: "2028-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" },
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2025-02-15", expiry_date: "2027-02-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }
+      ]
+    },
+    {
+      firstname: "Igor",
+      lastname: "Smirnov",
+      preferred_rating: "A",
+      primary_bop_oem: "GE",
+      secondary_skills: ["Multiplex Controls"],
+      current_status: "Available",
+      last_worked: new Date("2026-06-10"),
+      visa_details: { visa_country: "Norway", visa_issue_date: "2024-01-01", visa_expiry_date: "2028-01-01" },
+      passport: { expiry_date: "2032-01-01", passport_number: "PP800010", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2022-01-01" },
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2024-01-10", expiry_date: "2028-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" },
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2025-02-15", expiry_date: "2027-02-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }
+      ]
+    },
+    {
+      firstname: "Jane",
+      lastname: "Doe",
+      preferred_rating: "AAA",
+      primary_bop_oem: "Cameron",
+      secondary_skills: ["Wellhead Systems"],
+      current_status: "Available",
+      last_worked: new Date("2026-06-05"),
+      visa_details: { visa_country: "UK", visa_issue_date: "2024-01-01", visa_expiry_date: "2028-01-01" },
+      passport: { expiry_date: "2032-01-01", passport_number: "PP800011", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2022-01-01" },
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2024-01-10", expiry_date: "2028-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" },
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2025-02-15", expiry_date: "2027-02-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }
+      ]
+    },
+    {
+      firstname: "Robert",
+      lastname: "Miller",
+      preferred_rating: "AA",
+      primary_bop_oem: "NOV",
+      secondary_skills: ["Marine Risers"],
+      current_status: "Available",
+      last_worked: new Date("2026-06-12"),
+      visa_details: { visa_country: "USA", visa_issue_date: "2024-01-01", visa_expiry_date: "2028-01-01" },
+      passport: { expiry_date: "2032-01-01", passport_number: "PP800012", issuing_country: "United Kingdom", passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf", issue_date: "2022-01-01" },
+      certs: [
+        { certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)", issue_date: "2024-01-10", expiry_date: "2028-01-10", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" },
+        { certificate_name: "Offshore Medical Certificate", issue_date: "2025-02-15", expiry_date: "2027-02-15", certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf" }
+      ]
+    }
+  ];
 
-    crewDataList.push({
-      firstname: `CrewMember${i}`,
-      lastname: `Surname${i}`,
-      dateOfBirth: `198${i % 10}-0${(i % 9) + 1}-15`,
+  const crewDataList = crewDetails.map((crew, idx) => {
+    const nationality = nationalities[idx % nationalities.length];
+    const org = organizations[idx % organizations.length];
+    const rank = ranks[idx % ranks.length];
+
+    return {
+      firstname: crew.firstname,
+      lastname: crew.lastname,
+      dateOfBirth: `198${idx % 10}-0${(idx % 9) + 1}-15`,
       nationality,
-      gender: i % 2 === 0 ? "male" : "female",
-      email: `crew${i}@a.com`,
-      phone: `+4477009000${10 + i}`,
-      alternate_phone: `+4477009000${50 + i}`,
-      address: `${100 + i} High Street, Offshore Haven`,
+      gender: idx % 2 === 0 ? "male" : "female",
+      email: `crew${idx + 1}@a.com`,
+      phone: `+4477009000${10 + idx}`,
+      alternate_phone: `+4477009000${50 + idx}`,
+      address: `${100 + idx} High Street, Offshore Haven`,
       city: "Aberdeen",
       country: "United Kingdom",
-      postal_code: `AB${10 + i} 4YZ`,
+      postal_code: `AB${10 + idx} 4YZ`,
       password: hashedPassword,
-      passport: {
-        passport_number: `PP${800000 + i}`,
-        issue_date: "2021-04-12",
-        expiry_date: "2031-04-12",
-        issuing_country: "United Kingdom",
-        passport_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf",
-      },
+      passport: crew.passport,
       identity: {
         identity_type: "national_id",
-        identity_number: `NID${900000 + i}`,
+        identity_number: `NID${900000 + idx}`,
         issue_date: "2020-05-15",
         expiry_date: "2030-05-15",
         identity_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf",
       },
-      crew_certificate: [
-        {
-          certificate_name: "BOSIET (Basic Offshore Safety Induction and Emergency Training)",
-          issue_date: "2024-01-10",
-          expiry_date: "2028-01-10",
-          certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf",
-        },
-        {
-          certificate_name: "Offshore Medical Certificate",
-          issue_date: "2025-02-15",
-          expiry_date: "2027-02-15",
-          certificate_document: "https://res.cloudinary.com/demo/image/upload/sample.pdf",
-        },
-      ],
-      azerbaijan_vantage_number: `AZV${7000 + i}`,
-      norwegian_d_number: `NDN${6000 + i}`,
-      dawinci_number: `DAW${5000 + i}`,
-      vantage_number: `VAN${4000 + i}`,
+      crew_certificate: crew.certs,
+      azerbaijan_vantage_number: `AZV${7000 + idx}`,
+      norwegian_d_number: `NDN${6000 + idx}`,
+      dawinci_number: `DAW${5000 + idx}`,
+      vantage_number: `VAN${4000 + idx}`,
       organization: org,
-      linkedin: `https://linkedin.com/in/crewmember${i}`,
+      linkedin: `https://linkedin.com/in/crewmember${idx + 1}`,
       visa: `Visa Class C-1 | Expiry: 2028-10-12 | Country: Norway`,
       rank,
       isAvailable: true,
       createdBy: adminDoc._id,
-    });
-  }
+      preferred_rating: crew.preferred_rating,
+      primary_bop_oem: crew.primary_bop_oem,
+      secondary_skills: crew.secondary_skills,
+      current_status: crew.current_status,
+      last_worked: crew.last_worked,
+      visa_details: crew.visa_details,
+    };
+  });
 
   const crewDocs = await Crew.insertMany(crewDataList);
   console.log(`Seeded ${crewDocs.length} crew members.`);
@@ -254,30 +423,74 @@ async function seed() {
 
   // 6. Seed CrewAvailability
   console.log("Seeding Crew Availability...");
-  const availabilityData = [];
-  for (const crew of crewDocs) {
-    // 3 distinct windows of availability
-    const base1 = new Date();
-    base1.setDate(base1.getDate() - 60);
-    const end1 = new Date();
-    end1.setDate(end1.getDate() - 30);
+  const availabilityData: any[] = [];
 
-    const base2 = new Date();
-    base2.setDate(base2.getDate() - 5);
-    const end2 = new Date();
-    end2.setDate(end2.getDate() + 25);
+  const getDates = (offsetStart: number, offsetEnd: number) => {
+    const s = new Date();
+    s.setDate(s.getDate() + offsetStart);
+    const e = new Date();
+    e.setDate(e.getDate() + offsetEnd);
+    return { from: s, to: e };
+  };
 
-    const base3 = new Date();
-    base3.setDate(base3.getDate() + 35);
-    const end3 = new Date();
-    end3.setDate(end3.getDate() + 75);
+  crewDocs.forEach((crew) => {
+    const name = crew.firstname;
+    if (name === "John") {
+      const range1 = getDates(0, 30);
+      const range2 = getDates(-60, -35);
+      availabilityData.push(
+        { crew_id: crew._id, from: range1.from, to: range1.to, isAvailable: true },
+        { crew_id: crew._id, from: range2.from, to: range2.to, isAvailable: false, employer: "Subseaquence", client: "BP", rig_vessel: "Deepwater Atlas", country: "Angola", notes: "Completed subsea integration tour" }
+      );
+    } else if (name === "Mark") {
+      const range1 = getDates(2, 35);
+      const range2 = getDates(-50, -20);
+      availabilityData.push(
+        { crew_id: crew._id, from: range1.from, to: range1.to, isAvailable: true },
+        { crew_id: crew._id, from: range2.from, to: range2.to, isAvailable: false, employer: "GES", client: "Noble", rig_vessel: "Noble Venturer", country: "UK", notes: "Past assignment" }
+      );
+    } else if (name === "Ahmed") {
+      const range1 = getDates(0, 15);
+      const range2 = getDates(-40, -10);
+      availabilityData.push(
+        { crew_id: crew._id, from: range1.from, to: range1.to, isAvailable: true },
+        { crew_id: crew._id, from: range2.from, to: range2.to, isAvailable: false, employer: "SBS", client: "BP", rig_vessel: "Shah Deniz", country: "Azerbaijan", notes: "Working tour" }
+      );
+    } else if (name === "Steve") {
+      const range1 = getDates(-15, 25);
+      availabilityData.push(
+        { crew_id: crew._id, from: range1.from, to: range1.to, isAvailable: false, employer: "Subseaquence", client: "Transocean", rig_vessel: "Deepwater Atlas", country: "USA", notes: "On project North Sea Extraction Phase 1" }
+      );
+    } else if (name === "Sarah") {
+      const range1 = getDates(-10, 20);
+      availabilityData.push(
+        { crew_id: crew._id, from: range1.from, to: range1.to, isAvailable: false, employer: "GES", client: "Noble", rig_vessel: "Noble Venturer", country: "UK", notes: "Offshore competitor Stack maintenance" }
+      );
+    } else if (name === "David") {
+      const range1 = getDates(-2, 8);
+      availabilityData.push(
+        { crew_id: crew._id, from: range1.from, to: range1.to, isAvailable: false, employer: "Subseaquence", client: "Direct with Operator", rig_vessel: "None", country: "United Kingdom", notes: "Summer leave with family" }
+      );
+    } else if (name === "Rajesh") {
+      const range1 = getDates(-12, 12);
+      availabilityData.push(
+        { crew_id: crew._id, from: range1.from, to: range1.to, isAvailable: false, employer: "SBS", client: "Shell", rig_vessel: "Appomattox", country: "USA", notes: "Competitor SBS stack check" }
+      );
+    } else if (name === "Michael") {
+      const range1 = getDates(-20, 15);
+      availabilityData.push(
+        { crew_id: crew._id, from: range1.from, to: range1.to, isAvailable: false, employer: "RTC", client: "Equinor", rig_vessel: "Johan Castberg", country: "Norway", notes: "Competitor controls configuration" }
+      );
+    } else {
+      const range1 = getDates(0, 30);
+      const range2 = getDates(40, 80);
+      availabilityData.push(
+        { crew_id: crew._id, from: range1.from, to: range1.to, isAvailable: true },
+        { crew_id: crew._id, from: range2.from, to: range2.to, isAvailable: true }
+      );
+    }
+  });
 
-    availabilityData.push(
-      { crew_id: crew._id, from: base1, to: end1 },
-      { crew_id: crew._id, from: base2, to: end2 },
-      { crew_id: crew._id, from: base3, to: end3 }
-    );
-  }
   await CrewAvailability.insertMany(availabilityData);
   console.log("Seeded crew availability entries.");
 
@@ -602,8 +815,8 @@ async function seed() {
   console.log("\n=======================================================");
   console.log("SEEDING COMPLETED SUCCESSFULLY.");
   console.log("Database contains complete interconnected records:");
-  console.log(`- SuperAdmin: superadmin@a.com  (Password: ${PASSWORD_PLAIN})`);
-  console.log(`- Admin:      admin@a.com       (Password: ${PASSWORD_PLAIN})`);
+  console.log(`- SuperAdmin: superadmin@yopmail.com  (Password: ${PASSWORD_PLAIN})`);
+  console.log(`- Admin:      marine-admin@yopmail.com       (Password: ${PASSWORD_PLAIN})`);
   console.log(`- Crew:       crew1@a.com to crew12@a.com (Password: ${PASSWORD_PLAIN})`);
   console.log(`- Projects:   ${projects.length} Active / OnHold Projects`);
   console.log(`- Rigs:       ${rigs.length} Active Drilling Rigs`);

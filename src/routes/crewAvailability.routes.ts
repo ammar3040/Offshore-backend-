@@ -4,6 +4,7 @@ import {
   deleteCrewAvailabilityHandler,
   getCrewAvailabilities,
   updateCrewAvailabilityHandler,
+  getBulkCrewAvailabilities,
 } from "../controllers/crewAvailability.controller";
 import { authenticateAdminOrCrew, authenticateCrew } from "../middleware/auth";
 import { validate } from "../middleware/validate";
@@ -15,6 +16,12 @@ import {
 } from "../validations/crewAvailability.validation";
 
 const router = Router();
+
+router.get(
+  "/bulk",
+  authenticateAdminOrCrew,
+  getBulkCrewAvailabilities
+);
 
 // GET - accessible by both admin and crew
 // Crew: returns own availabilities (crew_id from token)

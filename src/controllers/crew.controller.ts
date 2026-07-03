@@ -246,6 +246,50 @@ function crewHasExpiredCerts(crewMember: CrewPublic, now = new Date()): boolean 
   return false;
 }
 
+function computeExpiryWarnings(crewMember: CrewPublic, now = new Date()): string[] {
+  const warnings: string[] = [];
+  const todayMs = now.getTime();
+  const warningHorizonMs = todayMs + 30 * 24 * 60 * 60 * 1000; // 30 days alert
+
+  if (crewMember.passport?.expiry_date) {
+    const passportExpiry = new Date(crewMember.passport.expiry_date).getTime();
+    if (!Number.isNaN(passportExpiry)) {
+      if (passportExpiry < todayMs) {
+        warnings.push("Passport expired");
+      } else if (passportExpiry < warningHorizonMs) {
+        const days = Math.ceil((passportExpiry - todayMs) / (24 * 60 * 60 * 1000));
+        warnings.push(`Passport expires in ${days} days`);
+      }
+    }
+  }
+
+  if (crewMember.visa_details?.visa_expiry_date) {
+    const visaExpiry = new Date(crewMember.visa_details.visa_expiry_date).getTime();
+    if (!Number.isNaN(visaExpiry)) {
+      if (visaExpiry < todayMs) {
+        warnings.push("Visa expired");
+      } else if (visaExpiry < warningHorizonMs) {
+        const days = Math.ceil((visaExpiry - todayMs) / (24 * 60 * 60 * 1000));
+        warnings.push(`Visa expires in ${days} days`);
+      }
+    }
+  }
+
+  for (const cert of crewMember.crew_certificate ?? []) {
+    const certExpiry = new Date(cert.expiry_date).getTime();
+    if (!Number.isNaN(certExpiry)) {
+      if (certExpiry < todayMs) {
+        warnings.push(`${cert.certificate_name} expired`);
+      } else if (certExpiry < warningHorizonMs) {
+        const days = Math.ceil((certExpiry - todayMs) / (24 * 60 * 60 * 1000));
+        warnings.push(`${cert.certificate_name} expires in ${days} days`);
+      }
+    }
+  }
+
+  return warnings;
+}
+
 function hasRequiredFormFields(
   body: Record<string, unknown>,
   files: { passport_document?: Express.Multer.File[]; identity_document?: Express.Multer.File[]; certificate_document?: Express.Multer.File[] }
@@ -451,6 +495,7 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       employer,
       availableWithinDays,
       expiredCerts,
+      client,
     } = req.query as {
       availabilityStart?: string;
       availabilityEnd?: string;
@@ -461,6 +506,7 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       employer?: string;
       availableWithinDays?: string;
       expiredCerts?: string;
+      client?: string;
     };
 
     let filteredCrew = crew;
@@ -582,6 +628,14 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       const now = new Date();
       filteredCrew = filteredCrew.filter((c) => crewHasExpiredCerts(c, now));
     }
+    if (client) {
+      filteredCrew = filteredCrew.filter((c) => {
+        const memberAvails = availsByCrewId.get(c.id) ?? [];
+        return memberAvails.some(
+          (av) => av.client && av.client.toLowerCase().includes(client.toLowerCase())
+        );
+      });
+    }
 
     const now = new Date();
     const crewWithSignal = filteredCrew.map((c) => {
@@ -589,12 +643,14 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       const memberAvails = availsByCrewId.get(c.id) ?? [];
       const signal = computeCrewSignal(activeProjects, memberAvails, now);
       const currentAssignment = getCurrentAssignmentFromAvails(memberAvails, now);
+      const expiryWarnings = computeExpiryWarnings(c, now);
 
       return {
         ...c,
         activeProjects,
         signal,
         ...(currentAssignment ? { currentAssignment } : {}),
+        expiryWarnings,
       };
     });
 
@@ -651,11 +707,13 @@ export async function getCrewById(
     const signal = computeCrewSignal(activeProjects, memberAvails, now);
 
     const currentAssignment = getCurrentAssignmentFromAvails(memberAvails, now);
+    const expiryWarnings = computeExpiryWarnings(crew, now);
 
     const crewObj = {
       ...crew,
       signal,
       ...(currentAssignment ? { currentAssignment } : {}),
+      expiryWarnings,
     };
 
     return res.json({ crew: crewObj, projects });

@@ -18,8 +18,45 @@ import {
   findProjectById,
   updateProject,
   ProjectStatus,
+  Project,
+  ProjectDuration,
 } from "../models";
-import type { Project, ProjectDuration } from "../models/project.model";
+function getProjectWarnings(project: Project): string[] {
+  const warnings: string[] = [];
+  const projectEnd = new Date(project.duration.endDate).getTime();
+  if (Number.isNaN(projectEnd)) return [];
+
+  const participants = project.participants ?? [];
+  for (const participant of participants) {
+    if (participant && typeof participant === "object" && "firstname" in participant) {
+      const crew = participant as any;
+      const name = `${crew.firstname} ${crew.lastname}`;
+
+      if (crew.passport?.expiry_date) {
+        const passportExpiry = new Date(crew.passport.expiry_date).getTime();
+        if (!Number.isNaN(passportExpiry) && passportExpiry < projectEnd) {
+          warnings.push(`Participant ${name}'s passport expires on ${crew.passport.expiry_date} (before project end).`);
+        }
+      }
+
+      if (crew.visa_details?.visa_expiry_date) {
+        const visaExpiry = new Date(crew.visa_details.visa_expiry_date).getTime();
+        if (!Number.isNaN(visaExpiry) && visaExpiry < projectEnd) {
+          warnings.push(`Participant ${name}'s visa expires on ${crew.visa_details.visa_expiry_date} (before project end).`);
+        }
+      }
+
+      for (const cert of crew.crew_certificate ?? []) {
+        const certExpiry = new Date(cert.expiry_date).getTime();
+        if (!Number.isNaN(certExpiry) && certExpiry < projectEnd) {
+          warnings.push(`Participant ${name}'s certificate '${cert.certificate_name}' expires on ${cert.expiry_date} (before project end).`);
+        }
+      }
+    }
+  }
+
+  return warnings;
+}
 
 export async function getProjects(req: AuthenticatedRequest, res: Response) {
   try {
@@ -59,7 +96,8 @@ export async function getProjectById(
     if (!projectOwnedByProject(project, userId, role)) {
       return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
     }
-    return res.json({ project });
+    const warnings = getProjectWarnings(project);
+    return res.json({ project, warnings });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching project:", error);
@@ -157,7 +195,9 @@ export async function postProject(req: AuthenticatedRequest, res: Response) {
       )
     );
 
-    return res.status(201).json({ message: "Project created successfully.", project });
+    const populated = await findProjectById(project.id);
+    const warnings = populated ? getProjectWarnings(populated) : [];
+    return res.status(201).json({ message: "Project created successfully.", project, warnings });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error creating project:", error);
@@ -246,7 +286,9 @@ export async function patchProject(
       );
     }
 
-    return res.json({ message: "Project updated successfully.", project });
+    const populated = await findProjectById(project.id);
+    const warnings = populated ? getProjectWarnings(populated) : [];
+    return res.json({ message: "Project updated successfully.", project, warnings });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error updating project:", error);

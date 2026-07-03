@@ -7,6 +7,7 @@ import {
   findCrewAvailabilityById,
   updateCrewAvailability,
   CrewAvailabilityModel,
+  toCrewAvailability,
   type CrewAvailability,
 } from "../models/crewAvailability.model";
 import type { AuthenticatedRequest } from "../middleware/auth";
@@ -332,6 +333,55 @@ export async function deleteCrewAvailabilityHandler(req: AuthenticatedRequest, r
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error deleting crew availability:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function getBulkCrewAvailabilities(req: AuthenticatedRequest, res: Response) {
+  try {
+    const userId = req.user?.userId;
+    const role = req.user?.role;
+
+    if (!userId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const { crew_ids } = (req.query as { crew_ids?: string }) || {};
+    if (!crew_ids) {
+      return res.status(400).json({ message: "crew_ids parameter is required." });
+    }
+
+    const idList = crew_ids.split(",").map((id) => id.trim()).filter(Boolean);
+    if (idList.length === 0) {
+      return res.status(400).json({ message: "Invalid or empty crew_ids parameter." });
+    }
+
+    // Verify access to all requested crew members
+    if (role !== "admin" && role !== "superadmin") {
+      // Non-admins can only fetch their own
+      const onlySelf = idList.every((id) => id === userId);
+      if (!onlySelf) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
+    } else {
+      // Admins: verify they own each crew
+      const allowedPromises = idList.map((id) => crewOwnedByCaller(id, userId, role));
+      const allowedResults = await Promise.all(allowedPromises);
+      if (allowedResults.some((allowed) => !allowed)) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
+    }
+
+    const availabilities = await CrewAvailabilityModel.find({
+      crew_id: { $in: idList.map((id) => new mongoose.Types.ObjectId(id)) },
+    });
+
+    return res.json({
+      availabilities: availabilities.map((doc) => enrichAvailabilityResponse(toCrewAvailability(doc))),
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error fetching bulk crew availabilities:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }

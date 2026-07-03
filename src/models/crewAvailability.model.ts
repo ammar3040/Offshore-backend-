@@ -37,7 +37,7 @@ export const CrewAvailabilityModel: Model<CrewAvailabilityDocument> =
   mongoose.models.CrewAvailability ??
   mongoose.model<CrewAvailabilityDocument>("CrewAvailability", crewAvailabilitySchema);
 
-function toCrewAvailability(doc: CrewAvailabilityDocument): CrewAvailability {
+export function toCrewAvailability(doc: CrewAvailabilityDocument): CrewAvailability {
   return {
     id: doc._id.toString(),
     crew_id: doc.crew_id,
