@@ -5,12 +5,35 @@ import {
   deleteCrewAvailability,
   findCrewAvailabilitiesByCrewId,
   findCrewAvailabilityById,
-  findCrewAvailabilityByIdAndCrewId,
   updateCrewAvailability,
   CrewAvailabilityModel,
+  type CrewAvailability,
 } from "../models/crewAvailability.model";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import { ACCESS_DENIED_MESSAGE, crewOwnedByCaller } from "../lib/resource-access";
+import { resolveEmployerForStorage, formatEmployerForResponse } from "../constants/employers";
+
+function addUTCDays(date: Date, days: number): Date {
+  const result = new Date(date);
+  result.setUTCDate(result.getUTCDate() + days);
+  return result;
+}
+
+/** MD Section 3.3 — Available From = Expected Finish Date + 1 day (Phase 1 computed on read). */
+function enrichAvailabilityResponse(availability: CrewAvailability) {
+  const { employer: storedEmployer, ...restFields } = availability;
+  const employerParts = formatEmployerForResponse(storedEmployer);
+  const available_from =
+    availability.isAvailable === false
+      ? addUTCDays(new Date(availability.to), 1).toISOString()
+      : undefined;
+
+  return {
+    ...restFields,
+    ...employerParts,
+    available_from,
+  };
+}
 
 export async function getCrewAvailabilities(req: AuthenticatedRequest, res: Response) {
   try {
@@ -38,7 +61,7 @@ export async function getCrewAvailabilities(req: AuthenticatedRequest, res: Resp
     }
 
     const availabilities = await findCrewAvailabilitiesByCrewId(crewId);
-    return res.json({ availabilities });
+    return res.json({ availabilities: availabilities.map(enrichAvailabilityResponse) });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error fetching crew availabilities:", error);
@@ -55,7 +78,45 @@ export async function addCrewAvailability(req: AuthenticatedRequest, res: Respon
       return res.status(401).json({ message: "Authentication required." });
     }
 
-    const { crew_id, from, to, isAvailable } = req.body as { crew_id?: string; from: Date; to: Date; isAvailable?: boolean };
+    const {
+      crew_id,
+      from,
+      to,
+      isAvailable,
+      employer,
+      employer_other,
+      client,
+      rig_vessel,
+      country,
+      notes,
+    } = req.body as {
+      crew_id?: string;
+      from: Date;
+      to: Date;
+      isAvailable?: boolean;
+      employer?: string;
+      employer_other?: string;
+      client?: string;
+      rig_vessel?: string;
+      country?: string;
+      notes?: string;
+    };
+
+    const unavailable = isAvailable === false;
+    let resolvedEmployer: string | undefined;
+    if (unavailable && employer) {
+      const resolved = resolveEmployerForStorage(employer, employer_other);
+      if (!resolved.ok) {
+        return res.status(400).json({ message: resolved.message });
+      }
+      resolvedEmployer = resolved.value;
+    } else if (employer) {
+      const resolved = resolveEmployerForStorage(employer, employer_other);
+      if (!resolved.ok) {
+        return res.status(400).json({ message: resolved.message });
+      }
+      resolvedEmployer = resolved.value;
+    }
 
     let targetCrewId: string;
 
@@ -102,11 +163,16 @@ export async function addCrewAvailability(req: AuthenticatedRequest, res: Respon
       from: fromDate,
       to: toDate,
       isAvailable: isAvailable !== false,
+      ...(resolvedEmployer ? { employer: resolvedEmployer } : {}),
+      ...(client?.trim() ? { client: client.trim() } : {}),
+      ...(rig_vessel?.trim() ? { rig_vessel: rig_vessel.trim() } : {}),
+      ...(country?.trim() ? { country: country.trim() } : {}),
+      ...(notes?.trim() ? { notes: notes.trim() } : {}),
     });
 
     return res.status(201).json({
       message: "Availability added successfully.",
-      availability,
+      availability: enrichAvailabilityResponse(availability),
     });
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -125,7 +191,27 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
     }
 
     const { availability_id } = req.params as { availability_id: string };
-    const { from, to } = req.body as { from?: Date; to?: Date };
+    const {
+      from,
+      to,
+      isAvailable,
+      employer,
+      employer_other,
+      client,
+      rig_vessel,
+      country,
+      notes,
+    } = req.body as {
+      from?: Date;
+      to?: Date;
+      isAvailable?: boolean;
+      employer?: string;
+      employer_other?: string;
+      client?: string;
+      rig_vessel?: string;
+      country?: string;
+      notes?: string;
+    };
 
     const existing = await findCrewAvailabilityById(availability_id);
     if (!existing) {
@@ -147,9 +233,31 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
       }
     }
 
-    const updateData: { from?: Date; to?: Date } = {};
+    const updateData: {
+      from?: Date;
+      to?: Date;
+      isAvailable?: boolean;
+      employer?: string;
+      client?: string;
+      rig_vessel?: string;
+      country?: string;
+      notes?: string;
+    } = {};
     if (from !== undefined) updateData.from = new Date(from);
     if (to !== undefined) updateData.to = new Date(to);
+    if (isAvailable !== undefined) updateData.isAvailable = isAvailable;
+    if (client !== undefined) updateData.client = client.trim() || undefined;
+    if (rig_vessel !== undefined) updateData.rig_vessel = rig_vessel.trim() || undefined;
+    if (country !== undefined) updateData.country = country.trim() || undefined;
+    if (notes !== undefined) updateData.notes = notes.trim() || undefined;
+
+    if (employer !== undefined) {
+      const resolved = resolveEmployerForStorage(employer, employer_other);
+      if (!resolved.ok) {
+        return res.status(400).json({ message: resolved.message });
+      }
+      updateData.employer = resolved.value;
+    }
 
     const effectiveFrom = updateData.from ?? existing.from;
     const effectiveTo = updateData.to ?? existing.to;
@@ -175,7 +283,7 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
     const availability = await updateCrewAvailability(availability_id, updateData);
     return res.json({
       message: "Availability updated successfully.",
-      availability,
+      availability: availability ? enrichAvailabilityResponse(availability) : availability,
     });
   } catch (error) {
     // eslint-disable-next-line no-console

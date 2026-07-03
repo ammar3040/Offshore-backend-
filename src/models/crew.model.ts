@@ -6,6 +6,36 @@ export enum IdentityType {
   IdentityNumber = "identity_number",
 }
 
+export enum PreferredRating {
+  AAA = "AAA",
+  AA = "AA",
+  A = "A",
+  None = "None",
+}
+
+export enum BopOem {
+  Cameron = "Cameron",
+  NOV = "NOV",
+  GE = "GE",
+  Other = "Other",
+}
+
+export enum CrewStatus {
+  Available = "Available",
+  Offered = "Offered",
+  Confirmed = "Confirmed",
+  OnAssignment = "On assignment for us",
+  OffshoreCompetitor = "Offshore (Competitor)",
+  Holiday = "Holiday / Not Available",
+  Inactive = "Unknown / Inactive",
+}
+
+export interface VisaDetails {
+  visa_country?: string;
+  visa_issue_date?: string;
+  visa_expiry_date?: string;
+}
+
 export interface Passport {
   passport_number?: string;
   issue_date?: string;
@@ -57,6 +87,12 @@ export interface Crew {
   linkedin?: string;
   visa?: string;
   rank?: string;
+  preferred_rating?: PreferredRating;
+  primary_bop_oem?: BopOem;
+  secondary_skills?: string[];
+  current_status?: CrewStatus;
+  last_worked?: Date;
+  visa_details?: VisaDetails;
 }
 
 // Mongoose document type (has _id)
@@ -123,6 +159,16 @@ const crewSchema = new Schema<CrewDocument>(
     linkedin: { type: String },
     visa: { type: String },
     rank: { type: String },
+    preferred_rating: { type: String, enum: Object.values(PreferredRating), default: PreferredRating.None },
+    primary_bop_oem: { type: String, enum: Object.values(BopOem), default: BopOem.Other },
+    secondary_skills: { type: [String], default: [] },
+    current_status: { type: String, enum: Object.values(CrewStatus), default: CrewStatus.Available },
+    last_worked: { type: Date },
+    visa_details: {
+      visa_country: { type: String },
+      visa_issue_date: { type: String },
+      visa_expiry_date: { type: String },
+    },
   },
   { timestamps: true }
 );
@@ -178,6 +224,12 @@ function toCrew(doc: CrewDocument): CrewPublic {
     linkedin: doc.linkedin,
     visa: doc.visa,
     rank: doc.rank,
+    preferred_rating: doc.preferred_rating,
+    primary_bop_oem: doc.primary_bop_oem,
+    secondary_skills: doc.secondary_skills,
+    current_status: doc.current_status,
+    last_worked: doc.last_worked,
+    visa_details: doc.visa_details,
   };
 }
 

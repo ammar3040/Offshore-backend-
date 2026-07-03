@@ -6,6 +6,11 @@ export interface CrewAvailability {
   from: Date;
   to: Date;
   isAvailable?: boolean;
+  employer?: string;
+  client?: string;
+  rig_vessel?: string;
+  country?: string;
+  notes?: string;
 }
 
 export interface CrewAvailabilityDocument extends Omit<CrewAvailability, "id">, Document {
@@ -19,6 +24,11 @@ const crewAvailabilitySchema = new Schema<CrewAvailabilityDocument>(
     from: { type: Date, required: true },
     to: { type: Date, required: true },
     isAvailable: { type: Boolean, default: true },
+    employer: { type: String, required: false },
+    client: { type: String, required: false },
+    rig_vessel: { type: String, required: false },
+    country: { type: String, required: false },
+    notes: { type: String, required: false },
   },
   { timestamps: true }
 );
@@ -34,6 +44,11 @@ function toCrewAvailability(doc: CrewAvailabilityDocument): CrewAvailability {
     from: doc.from,
     to: doc.to,
     isAvailable: doc.isAvailable !== false,
+    employer: doc.employer,
+    client: doc.client,
+    rig_vessel: doc.rig_vessel,
+    country: doc.country,
+    notes: doc.notes,
   };
 }
 
@@ -64,7 +79,7 @@ export async function createCrewAvailability(
 
 export async function updateCrewAvailability(
   id: string,
-  data: Partial<Pick<CrewAvailability, "from" | "to">>
+  data: Partial<Omit<CrewAvailability, "id" | "crew_id">>
 ): Promise<CrewAvailability | null> {
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
   const doc = await CrewAvailabilityModel.findByIdAndUpdate(id, data, { new: true }).populate(

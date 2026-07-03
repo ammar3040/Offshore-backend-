@@ -24,12 +24,13 @@ import {
   crewAndProjectParamsSchema,
   crewAndTicketParamsSchema,
   crewIdParamSchema,
+  getCrewQuerySchema,
 } from "../validations/crew.validation";
 
 const router = Router();
 
 // crew management
-router.get("/", authenticateAdminOrSuperAdmin, getCrew);
+router.get("/", authenticateAdminOrSuperAdmin, validate(getCrewQuerySchema, "query"), getCrew);
 router.get(
   "/project/:project_id/available",
   authenticateAdminOrSuperAdmin,

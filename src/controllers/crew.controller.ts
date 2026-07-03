@@ -1,7 +1,7 @@
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { Response } from "express";
-// import { sendCrewWelcomeEmail } from "../services/email";
+import { sendCrewWelcomeEmail } from "../services/email";
 import {
   createCrew,
   deleteCrew,
@@ -14,6 +14,10 @@ import {
   updateCrew,
   updateCrewPassword,
   IdentityType,
+  BopOem,
+  CrewStatus,
+  PreferredRating,
+  type CrewPublic,
 } from "../models";
 import mongoose from "mongoose";
 import { findCrewAvailabilitiesByCrewId, CrewAvailabilityModel } from "../models/crewAvailability.model";
@@ -40,6 +44,12 @@ import {
   projectOwnedByCaller,
   projectOwnedByProject,
 } from "../lib/resource-access";
+import { formatEmployerForResponse, isKnownEmployer } from "../constants/employers";
+import {
+  parseLastWorked,
+  parseSecondarySkills,
+  parseVisaDetails,
+} from "../validations/crew.validation";
 
 type CrewFormPayload = Omit<Crew, "id" | "password">;
 
@@ -79,6 +89,161 @@ const CERTIFICATE_FIELDS = [
 function getString(body: Record<string, unknown>, key: string): string | undefined {
   const v = body[key];
   return typeof v === "string" ? v : undefined;
+}
+
+interface AvailabilityRecord {
+  from: Date;
+  to: Date;
+  isAvailable?: boolean;
+  employer?: string;
+  client?: string;
+  rig_vessel?: string;
+  country?: string;
+  notes?: string;
+}
+
+function parseExtendedCrewFieldsFromBody(
+  body: Record<string, unknown>
+): Partial<Omit<Crew, "id" | "password">> {
+  const extended: Partial<Omit<Crew, "id" | "password">> = {};
+
+  const preferredRating = getString(body, "preferred_rating");
+  if (preferredRating && Object.values(PreferredRating).includes(preferredRating as PreferredRating)) {
+    extended.preferred_rating = preferredRating as PreferredRating;
+  }
+
+  const bopOem = getString(body, "primary_bop_oem");
+  if (bopOem && Object.values(BopOem).includes(bopOem as BopOem)) {
+    extended.primary_bop_oem = bopOem as BopOem;
+  }
+
+  const skills = parseSecondarySkills(body.secondary_skills ?? getString(body, "secondary_skills"));
+  if (skills !== undefined) {
+    extended.secondary_skills = skills;
+  }
+
+  const status = getString(body, "current_status");
+  if (status && Object.values(CrewStatus).includes(status as CrewStatus)) {
+    extended.current_status = status as CrewStatus;
+  }
+
+  const lastWorkedRaw = body.last_worked ?? getString(body, "last_worked");
+  if (lastWorkedRaw !== undefined) {
+    const parsed = parseLastWorked(lastWorkedRaw);
+    if (parsed === null) {
+      extended.last_worked = undefined;
+    } else if (parsed instanceof Date) {
+      extended.last_worked = parsed;
+    }
+  }
+
+  const visaDetails = parseVisaDetails(body.visa_details ?? getString(body, "visa_details"));
+  if (visaDetails) {
+    extended.visa_details = visaDetails;
+  }
+
+  return extended;
+}
+
+function isDateInRange(date: Date, from: Date, to: Date): boolean {
+  const d = date.getTime();
+  return d >= new Date(from).getTime() && d <= new Date(to).getTime();
+}
+
+function isCalendarUnavailableToday(memberAvails: AvailabilityRecord[], now = new Date()): boolean {
+  const hasUnavailableToday = memberAvails.some(
+    (av) => isDateInRange(now, av.from, av.to) && av.isAvailable === false
+  );
+  if (hasUnavailableToday) return true;
+
+  const availableRecords = memberAvails.filter((av) => av.isAvailable !== false);
+  if (availableRecords.length === 0) return false;
+
+  return !availableRecords.some((av) => isDateInRange(now, av.from, av.to));
+}
+
+function computeCrewSignal(
+  activeProjects: Project[],
+  memberAvails: AvailabilityRecord[],
+  now = new Date()
+): "GREEN" | "ORANGE" | "RED" | "UNAVAILABLE" {
+  if (isCalendarUnavailableToday(memberAvails, now)) {
+    return "UNAVAILABLE";
+  }
+  return crewAvailabilitySignal(activeProjects);
+}
+
+function getCurrentAssignmentFromAvails(memberAvails: AvailabilityRecord[], now = new Date()) {
+  const activeBlock = memberAvails.find(
+    (av) => av.isAvailable === false && isDateInRange(now, av.from, av.to)
+  );
+  if (!activeBlock) return null;
+
+  const employerParts = formatEmployerForResponse(activeBlock.employer);
+  const available_from = addUTCDays(parseAsUTCDate(activeBlock.to), 1).toISOString();
+
+  return {
+    ...employerParts,
+    client: activeBlock.client,
+    rig_vessel: activeBlock.rig_vessel,
+    country: activeBlock.country,
+    from: activeBlock.from,
+    to: activeBlock.to,
+    available_from,
+    notes: activeBlock.notes,
+  };
+}
+
+function crewMatchesEmployerFilter(
+  memberAvails: AvailabilityRecord[],
+  employerFilter: string,
+  now = new Date()
+): boolean {
+  const activeBlock = memberAvails.find(
+    (av) => av.isAvailable === false && isDateInRange(now, av.from, av.to)
+  );
+  if (!activeBlock?.employer) return false;
+
+  if (employerFilter === "Other") {
+    return !isKnownEmployer(activeBlock.employer);
+  }
+  return activeBlock.employer === employerFilter;
+}
+
+function crewAvailableWithinDays(
+  memberAvails: AvailabilityRecord[],
+  days: number,
+  now = new Date()
+): boolean {
+  const today = parseAsUTCDate(now);
+  const horizon = addUTCDays(today, days);
+
+  return memberAvails.some((av) => {
+    if (av.isAvailable !== false) return false;
+    const availableFrom = addUTCDays(parseAsUTCDate(av.to), 1);
+    return availableFrom >= today && availableFrom <= horizon;
+  });
+}
+
+function crewHasExpiredCerts(crewMember: CrewPublic, now = new Date()): boolean {
+  const todayMs = now.getTime();
+
+  if (crewMember.passport?.expiry_date) {
+    const passportExpiry = new Date(crewMember.passport.expiry_date).getTime();
+    if (!Number.isNaN(passportExpiry) && passportExpiry < todayMs) return true;
+  }
+
+  if (crewMember.visa_details?.visa_expiry_date) {
+    const visaExpiry = new Date(crewMember.visa_details.visa_expiry_date).getTime();
+    if (!Number.isNaN(visaExpiry) && visaExpiry < todayMs) return true;
+  }
+
+  for (const cert of crewMember.crew_certificate ?? []) {
+    const certExpiry = new Date(cert.expiry_date).getTime();
+    if (!Number.isNaN(certExpiry) && certExpiry < todayMs) return true;
+  }
+
+  return false;
 }
 
 function hasRequiredFormFields(
@@ -201,6 +366,7 @@ function hasRequiredFormFields(
     linkedin: getString(body, "linkedin"),
     visa: getString(body, "visa"),
     rank: getString(body, "rank"),
+    ...parseExtendedCrewFieldsFromBody(body),
   };
   return { ok: true, data };
 }
@@ -274,11 +440,27 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       availsByCrewId.get(cid)!.push(av);
     }
 
-    // Parse query params for date filtering
-    const { availabilityStart, availabilityEnd, type } = req.query as {
+    // Parse query params for date filtering and mobilization filters (MD Section 7)
+    const {
+      availabilityStart,
+      availabilityEnd,
+      type,
+      status,
+      rating,
+      bopOem,
+      employer,
+      availableWithinDays,
+      expiredCerts,
+    } = req.query as {
       availabilityStart?: string;
       availabilityEnd?: string;
       type?: "available" | "unavailable";
+      status?: CrewStatus;
+      rating?: PreferredRating;
+      bopOem?: BopOem;
+      employer?: string;
+      availableWithinDays?: string;
+      expiredCerts?: string;
     };
 
     let filteredCrew = crew;
@@ -372,14 +554,47 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       });
     }
 
+    if (status) {
+      filteredCrew = filteredCrew.filter((c) => c.current_status === status);
+    }
+    if (rating) {
+      filteredCrew = filteredCrew.filter((c) => c.preferred_rating === rating);
+    }
+    if (bopOem) {
+      filteredCrew = filteredCrew.filter((c) => c.primary_bop_oem === bopOem);
+    }
+    if (employer) {
+      const now = new Date();
+      filteredCrew = filteredCrew.filter((c) =>
+        crewMatchesEmployerFilter(availsByCrewId.get(c.id) ?? [], employer, now)
+      );
+    }
+    if (availableWithinDays) {
+      const days = parseInt(availableWithinDays, 10);
+      if (!Number.isNaN(days) && days > 0) {
+        const now = new Date();
+        filteredCrew = filteredCrew.filter((c) =>
+          crewAvailableWithinDays(availsByCrewId.get(c.id) ?? [], days, now)
+        );
+      }
+    }
+    if (expiredCerts === "true") {
+      const now = new Date();
+      filteredCrew = filteredCrew.filter((c) => crewHasExpiredCerts(c, now));
+    }
+
+    const now = new Date();
     const crewWithSignal = filteredCrew.map((c) => {
       const activeProjects = activeByCrewId.get(c.id) ?? [];
-      const signal = crewAvailabilitySignal(activeProjects);
+      const memberAvails = availsByCrewId.get(c.id) ?? [];
+      const signal = computeCrewSignal(activeProjects, memberAvails, now);
+      const currentAssignment = getCurrentAssignmentFromAvails(memberAvails, now);
 
       return {
         ...c,
         activeProjects,
         signal,
+        ...(currentAssignment ? { currentAssignment } : {}),
       };
     });
 
@@ -428,41 +643,19 @@ export async function getCrewById(
       : assignedProjects.filter((p) => projectOwnedByProject(p, userId, role));
 
     const activeProjects = projects.filter((p) => {
-      const now = new Date();
-      return new Date(p.duration.startDate) < now && new Date(p.duration.endDate) > now;
+      const nowForProject = new Date();
+      return new Date(p.duration.startDate) < nowForProject && new Date(p.duration.endDate) > nowForProject;
     });
 
-    let isAvailableTodayByCalendar = true;
     const now = new Date();
-    const hasUnavailableToday = memberAvails.some((av) => {
-      const fromDate = new Date(av.from);
-      const toDate = new Date(av.to);
-      return now >= fromDate && now <= toDate && av.isAvailable === false;
-    });
+    const signal = computeCrewSignal(activeProjects, memberAvails, now);
 
-    if (hasUnavailableToday) {
-      isAvailableTodayByCalendar = false;
-    } else {
-      const availableRecords = memberAvails.filter((av) => av.isAvailable !== false);
-      if (availableRecords.length > 0) {
-        isAvailableTodayByCalendar = availableRecords.some((av) => {
-          const fromDate = new Date(av.from);
-          const toDate = new Date(av.to);
-          return now >= fromDate && now <= toDate;
-        });
-      }
-    }
-
-    let signal: "GREEN" | "ORANGE" | "RED" | "UNAVAILABLE";
-    if (!isAvailableTodayByCalendar) {
-      signal = "UNAVAILABLE";
-    } else {
-      signal = crewAvailabilitySignal(activeProjects);
-    }
+    const currentAssignment = getCurrentAssignmentFromAvails(memberAvails, now);
 
     const crewObj = {
       ...crew,
       signal,
+      ...(currentAssignment ? { currentAssignment } : {}),
     };
 
     return res.json({ crew: crewObj, projects });
@@ -627,10 +820,12 @@ export async function postCrew(
       createdBy: new mongoose.Types.ObjectId(userId),
     });
 
-    // eslint-disable-next-line no-console
-    console.log("Crew created - generated password for", result.data.email, ":", plainPassword);
-
-    // await sendCrewWelcomeEmail(result.data.email, result.data.firstname, plainPassword);
+    try {
+      await sendCrewWelcomeEmail(result.data.email, result.data.firstname, plainPassword);
+    } catch (emailErr) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to send crew welcome email:", emailErr);
+    }
 
     return res.status(201).json({
       message: "Crew created successfully.",
@@ -781,6 +976,8 @@ function buildCrewUpdateFromForm(
     if (v !== undefined) update[key] = v || undefined;
   }
 
+  Object.assign(update, parseExtendedCrewFieldsFromBody(body));
+
   return update as Partial<Omit<Crew, "id" | "password">>;
 }
 
@@ -844,6 +1041,21 @@ export async function patchCrew(
       updateData = formUpdate;
     } else {
       updateData = body as Partial<Omit<Crew, "id" | "password">>;
+    }
+
+    if (!isMultipart) {
+      const extendedFromJson = parseExtendedCrewFieldsFromBody(body);
+      updateData = { ...updateData, ...extendedFromJson };
+    }
+
+    if (updateData.preferred_rating && !Object.values(PreferredRating).includes(updateData.preferred_rating)) {
+      return res.status(400).json({ message: "Invalid preferred_rating value." });
+    }
+    if (updateData.primary_bop_oem && !Object.values(BopOem).includes(updateData.primary_bop_oem)) {
+      return res.status(400).json({ message: "Invalid primary_bop_oem value." });
+    }
+    if (updateData.current_status && !Object.values(CrewStatus).includes(updateData.current_status)) {
+      return res.status(400).json({ message: "Invalid current_status value." });
     }
 
     if (!updateData || Object.keys(updateData).length === 0) {
