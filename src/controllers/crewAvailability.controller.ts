@@ -20,6 +20,25 @@ function addUTCDays(date: Date, days: number): Date {
   return result;
 }
 
+async function syncCrewStatus(crewId: string) {
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  const activeRange = await CrewAvailabilityModel.findOne({
+    crew_id: new mongoose.Types.ObjectId(crewId),
+    from: { $lte: today },
+    to: { $gte: today },
+  });
+
+  let status = "Available";
+  if (activeRange) {
+    status = activeRange.status || (activeRange.isAvailable !== false ? "Available" : "Holiday / Not Available");
+  }
+
+  const { CrewModel } = await import("../models/crew.model");
+  await CrewModel.findByIdAndUpdate(crewId, { current_status: status });
+}
+
 /** MD Section 3.3 — Available From = Expected Finish Date + 1 day (Phase 1 computed on read). */
 function enrichAvailabilityResponse(availability: CrewAvailability) {
   const { employer: storedEmployer, ...restFields } = availability;
@@ -90,6 +109,7 @@ export async function addCrewAvailability(req: AuthenticatedRequest, res: Respon
       rig_vessel,
       country,
       notes,
+      status,
     } = req.body as {
       crew_id?: string;
       from: Date;
@@ -101,6 +121,7 @@ export async function addCrewAvailability(req: AuthenticatedRequest, res: Respon
       rig_vessel?: string;
       country?: string;
       notes?: string;
+      status?: string;
     };
 
     const unavailable = isAvailable === false;
@@ -164,12 +185,15 @@ export async function addCrewAvailability(req: AuthenticatedRequest, res: Respon
       from: fromDate,
       to: toDate,
       isAvailable: isAvailable !== false,
+      status,
       ...(resolvedEmployer ? { employer: resolvedEmployer } : {}),
       ...(client?.trim() ? { client: client.trim() } : {}),
       ...(rig_vessel?.trim() ? { rig_vessel: rig_vessel.trim() } : {}),
       ...(country?.trim() ? { country: country.trim() } : {}),
       ...(notes?.trim() ? { notes: notes.trim() } : {}),
     });
+
+    await syncCrewStatus(targetCrewId);
 
     return res.status(201).json({
       message: "Availability added successfully.",
@@ -202,6 +226,7 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
       rig_vessel,
       country,
       notes,
+      status,
     } = req.body as {
       from?: Date;
       to?: Date;
@@ -212,6 +237,7 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
       rig_vessel?: string;
       country?: string;
       notes?: string;
+      status?: string;
     };
 
     const existing = await findCrewAvailabilityById(availability_id);
@@ -243,6 +269,7 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
       rig_vessel?: string;
       country?: string;
       notes?: string;
+      status?: string;
     } = {};
     if (from !== undefined) updateData.from = new Date(from);
     if (to !== undefined) updateData.to = new Date(to);
@@ -251,6 +278,7 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
     if (rig_vessel !== undefined) updateData.rig_vessel = rig_vessel.trim() || undefined;
     if (country !== undefined) updateData.country = country.trim() || undefined;
     if (notes !== undefined) updateData.notes = notes.trim() || undefined;
+    if (status !== undefined) updateData.status = status;
 
     if (employer !== undefined) {
       const resolved = resolveEmployerForStorage(employer, employer_other);
@@ -282,6 +310,9 @@ export async function updateCrewAvailabilityHandler(req: AuthenticatedRequest, r
     }
 
     const availability = await updateCrewAvailability(availability_id, updateData);
+    if (availability) {
+      await syncCrewStatus(associatedCrewId);
+    }
     return res.json({
       message: "Availability updated successfully.",
       availability: availability ? enrichAvailabilityResponse(availability) : availability,
@@ -328,6 +359,8 @@ export async function deleteCrewAvailabilityHandler(req: AuthenticatedRequest, r
     if (!deleted) {
       return res.status(500).json({ message: "Failed to delete availability." });
     }
+
+    await syncCrewStatus(associatedCrewId);
 
     return res.json({ message: "Availability deleted successfully." });
   } catch (error) {

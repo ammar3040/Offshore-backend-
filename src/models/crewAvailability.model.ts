@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
+import { CrewStatus } from "./crew.model";
 
 export interface CrewAvailability {
   id: string;
@@ -11,11 +12,13 @@ export interface CrewAvailability {
   rig_vessel?: string;
   country?: string;
   notes?: string;
+  status?: string;
 }
 
 export interface CrewAvailabilityDocument extends Omit<CrewAvailability, "id">, Document {
   _id: mongoose.Types.ObjectId;
   isAvailable?: boolean;
+  status?: string;
 }
 
 const crewAvailabilitySchema = new Schema<CrewAvailabilityDocument>(
@@ -29,6 +32,7 @@ const crewAvailabilitySchema = new Schema<CrewAvailabilityDocument>(
     rig_vessel: { type: String, required: false },
     country: { type: String, required: false },
     notes: { type: String, required: false },
+    status: { type: String, enum: Object.values(CrewStatus), required: false },
   },
   { timestamps: true }
 );
@@ -49,6 +53,7 @@ export function toCrewAvailability(doc: CrewAvailabilityDocument): CrewAvailabil
     rig_vessel: doc.rig_vessel,
     country: doc.country,
     notes: doc.notes,
+    status: doc.status,
   };
 }
 

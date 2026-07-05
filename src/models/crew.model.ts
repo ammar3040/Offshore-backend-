@@ -173,7 +173,7 @@ const crewSchema = new Schema<CrewDocument>(
   { timestamps: true }
 );
 
-const CrewModel: Model<CrewDocument> =
+export const CrewModel: Model<CrewDocument> =
   mongoose.models.Crew ?? mongoose.model<CrewDocument>("Crew", crewSchema);
 
 /** Crew without password - safe for API responses */

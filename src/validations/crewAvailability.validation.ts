@@ -1,5 +1,6 @@
 import Joi from "joi";
 import { EMPLOYER_VALUES } from "../constants/employers";
+import { CrewStatus } from "../models/crew.model";
 
 const objectId = Joi.string().regex(/^[0-9a-fA-F]{24}$/).message("must be a valid ObjectId");
 
@@ -12,6 +13,7 @@ const assignmentFieldsSchema = {
   rig_vessel: Joi.string().trim().max(200).optional().allow(""),
   country: Joi.string().trim().max(100).optional().allow(""),
   notes: Joi.string().trim().max(1000).optional().allow(""),
+  status: Joi.string().valid(...Object.values(CrewStatus)).optional(),
 };
 
 export const availabilityIdParamSchema = Joi.object({
