@@ -5,6 +5,7 @@ import mongoose from "mongoose";
 import {
   createCrewTicket,
   deleteCrewTicket,
+  markCrewTicketCancelled,
   findAdminById,
   findCrewTicketById,
   findAllCrewTicketsPaginated,
@@ -980,15 +981,40 @@ export async function deleteCrewTicketHandler(
     if (!ticket) {
       return res.status(404).json({ message: "Crew ticket not found." });
     }
+    if (ticket.status === CrewTicketStatus.Cancelled) {
+      return res.status(400).json({ message: "Ticket is already cancelled." });
+    }
+
     const { feeGbp, adminId } = await accrueCancellationDebtForDeletedCrewTicket(ticket);
-    const deleted = await deleteCrewTicket(id);
-    if (!deleted) {
+    const cancelledTicket = await markCrewTicketCancelled(
+      id,
+      role === "admin" ? actorUserId : undefined
+    );
+    if (!cancelledTicket) {
       if (adminId && feeGbp > 0) {
         await revertCancellationAccrual(adminId, feeGbp);
       }
       return res.status(404).json({ message: "Crew ticket not found." });
     }
-    return res.json({ message: "Crew ticket deleted successfully." });
+
+    let cancellationOutstanding: number | null = null;
+    let cancellationSlotsRemaining: number | null = null;
+    if (adminId) {
+      const admin = await findAdminById(adminId);
+      cancellationOutstanding = admin?.cancellationOutstanding ?? null;
+      cancellationSlotsRemaining = admin?.cancellationSlotsRemaining ?? null;
+    }
+
+    return res.json({
+      message: "Crew ticket cancelled successfully.",
+      crewTicket: withTicketPdfAccess(cancelledTicket),
+      cancellation: {
+        status: feeGbp > 0 ? "CHARGE_APPLIED" : "NO_CHARGE",
+        feeGbp,
+        cancellationOutstanding,
+        cancellationSlotsRemaining,
+      },
+    });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error deleting crew ticket:", error);
@@ -1014,15 +1040,21 @@ export async function deleteCrewTicketByCrewHandler(
     if (ticketCrewId !== crew_id) {
       return res.status(403).json({ message: "Ticket does not belong to this crew member." });
     }
+    if (ticket.status === CrewTicketStatus.Cancelled) {
+      return res.status(400).json({ message: "Ticket is already cancelled." });
+    }
     const { feeGbp, adminId } = await accrueCancellationDebtForDeletedCrewTicket(ticket);
-    const deleted = await deleteCrewTicket(ticket_id);
-    if (!deleted) {
+    const cancelledTicket = await markCrewTicketCancelled(ticket_id);
+    if (!cancelledTicket) {
       if (adminId && feeGbp > 0) {
         await revertCancellationAccrual(adminId, feeGbp);
       }
       return res.status(404).json({ message: "Crew ticket not found." });
     }
-    return res.json({ message: "Crew ticket deleted successfully." });
+    return res.json({
+      message: "Crew ticket cancelled successfully.",
+      crewTicket: withTicketPdfAccess(cancelledTicket),
+    });
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error deleting crew ticket:", error);

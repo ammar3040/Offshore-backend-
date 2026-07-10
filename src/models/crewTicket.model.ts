@@ -17,6 +17,7 @@ export enum TripType {
 export enum CrewTicketStatus {
   Unapproved = "UNAPPROVED",
   Approved = "APPROVED",
+  Cancelled = "CANCELLED",
 }
 
 export interface StoredFlightItinerarySegment {
@@ -85,6 +86,9 @@ export interface CrewTicket {
   /** Approval audit metadata */
   approvedAt?: Date;
   approvedBy?: mongoose.Types.ObjectId;
+  /** Cancellation audit metadata */
+  cancelledAt?: Date;
+  cancelledBy?: mongoose.Types.ObjectId;
   /** Markup applied to this booking */
   markup: number;
   /** Running balance — cumulative markup across bookings for the project */
@@ -197,6 +201,8 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
     bookingReference: { type: String, required: false, trim: true },
     approvedAt: { type: Date, required: false },
     approvedBy: { type: Schema.Types.ObjectId, ref: "SuperAdmin", required: false },
+    cancelledAt: { type: Date, required: false },
+    cancelledBy: { type: Schema.Types.ObjectId, ref: "Admin", required: false },
     markup: { type: Number, required: true, default: 0 },
     balance: { type: Number, required: true, default: 0 },
     price: { type: Number, required: true, default: 0 },
@@ -233,6 +239,8 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     bookingReference: doc.bookingReference,
     approvedAt: doc.approvedAt,
     approvedBy: doc.approvedBy,
+    cancelledAt: doc.cancelledAt,
+    cancelledBy: doc.cancelledBy,
     markup: doc.markup ?? 0,
     balance: doc.balance ?? 0,
     price: doc.price ?? 0,
@@ -386,7 +394,11 @@ export async function findCrewTicketBookConflict(
   if (!mongoose.Types.ObjectId.isValid(projectId) || !mongoose.Types.ObjectId.isValid(crewId)) {
     return null;
   }
-  const docs = await CrewTicketModel.find({ project_id: projectId, crew_id: crewId });
+  const docs = await CrewTicketModel.find({
+    project_id: projectId,
+    crew_id: crewId,
+    status: { $ne: CrewTicketStatus.Cancelled },
+  });
   for (const doc of docs) {
     const exStart = doc.travelStart;
     const exEnd = doc.travelEnd;
@@ -444,6 +456,27 @@ export async function updateCrewTicketPdfUrl(id: string, pdfUrl: string): Promis
     throw new Error("PDF URL is required.");
   }
   return updateCrewTicket(id, { pdf: trimmed });
+}
+
+export async function markCrewTicketCancelled(
+  id: string,
+  cancelledBy?: string
+): Promise<CrewTicket | null> {
+  if (!mongoose.Types.ObjectId.isValid(id)) return null;
+
+  const update: Record<string, unknown> = {
+    status: CrewTicketStatus.Cancelled,
+    cancelledAt: new Date(),
+  };
+  if (cancelledBy && mongoose.Types.ObjectId.isValid(cancelledBy)) {
+    update.cancelledBy = new mongoose.Types.ObjectId(cancelledBy);
+  }
+
+  const doc = await CrewTicketModel.findByIdAndUpdate(id, update, { new: true })
+    .populate("crew_id")
+    .populate("project_id")
+    .populate("rig_id");
+  return doc ? toCrewTicket(doc) : null;
 }
 
 export async function deleteCrewTicket(id: string): Promise<boolean> {
