@@ -28,6 +28,10 @@ import { findFirstSuperAdmin } from "../models/superadmin.model";
 import { projectRigObjectId } from "../models/project.model";
 // import { sendFlightTicketEmail, sendTicketApprovalRequestEmail } from "../services/email";
 import { sendTicketApprovalRequestEmail } from "../services/email";
+import {
+  removeBookingAvailabilityForTicket,
+  upsertBookingAvailabilityForTicket,
+} from "../services/booking-availability";
 import type { CrewTicket } from "../models/crewTicket.model";
 // import { getSignedCloudinaryDeliveryUrl } from "../lib/cloudinary-asset";
 import { generateAndUploadTicketPdf, resolveCrewTicketPdfBuffer } from "../services/ticketPdf";
@@ -487,7 +491,7 @@ function cabinToClass(cabin: string): CabinClass {
   return CabinClass.Economy;
 }
 
-/** Outbound start and final arrival from search/book flight legs. */
+/** Outbound start and final arrival from search/book flight legs (calendar days). */
 function parseTravelBoundsFromBookFlight(legs: unknown): { travelStart: Date; travelEnd: Date } | null {
   if (!Array.isArray(legs) || legs.length === 0) return null;
   const first = legs[0] as {
@@ -500,20 +504,23 @@ function parseTravelBoundsFromBookFlight(legs: unknown): { travelStart: Date; tr
   const lastItinArr = last?.itinerary;
   const lastItin =
     lastItinArr && lastItinArr.length > 0 ? lastItinArr[lastItinArr.length - 1] : undefined;
-  const depStr =
-    first?.departureTime || firstItin?.departureTime || "";
+  const depStr = first?.departureTime || firstItin?.departureTime || "";
   const arrStr = last?.arrivalTime || lastItin?.arrivalTime || "";
-  const travelStart = depStr ? new Date(depStr) : null;
-  const travelEnd = arrStr ? new Date(arrStr) : null;
-  if (
-    !travelStart ||
-    !travelEnd ||
-    Number.isNaN(travelStart.getTime()) ||
-    Number.isNaN(travelEnd.getTime())
-  ) {
-    return null;
-  }
-  return { travelStart, travelEnd };
+
+  const toNoonUtc = (value: string): Date | null => {
+    const m = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 12, 0, 0));
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12, 0, 0));
+  };
+
+  const travelStart = depStr ? toNoonUtc(depStr) : null;
+  const travelEnd = arrStr ? toNoonUtc(arrStr) : null;
+  if (!travelStart || !travelEnd) return null;
+  return travelStart <= travelEnd
+    ? { travelStart, travelEnd }
+    : { travelStart: travelEnd, travelEnd: travelStart };
 }
 
 export async function bookFlight(req: AuthenticatedRequest, res: Response) {
@@ -544,6 +551,7 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       price?: number;
       /** Currency of price, cashback (e.g. from search). Default GBP. */
       currency?: string;
+      travelDirection?: "HOME_TO_RIG" | "RIG_TO_HOME";
     };
 
     const crewIdsArray = Array.isArray(body.crew_ids) ? body.crew_ids : [];
@@ -710,9 +718,16 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
         ...(travelBounds
           ? { travelStart: travelBounds.travelStart, travelEnd: travelBounds.travelEnd }
           : {}),
+        travelDirection: body.travelDirection === "RIG_TO_HOME" ? "RIG_TO_HOME" : "HOME_TO_RIG",
         flightSnapshot,
       });
       created.push(ticket);
+      try {
+        await upsertBookingAvailabilityForTicket(ticket);
+      } catch (availErr) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to occupy crew availability for ticket:", ticket.id, availErr);
+      }
     }
 
     // Update admin balance (markup) and reduce cancellation debt (installment matches search surcharge in payload price)
@@ -804,6 +819,8 @@ export async function approveCrewTicket(
     if (!approvedTicket) {
       return res.status(404).json({ message: "Crew ticket not found." });
     }
+
+    await upsertBookingAvailabilityForTicket(approvedTicket);
 
     const { flight: flightData } = buildFlightTicketDataFromCrewTicket(approvedTicket);
     let ticketWithPdf = approvedTicket;
@@ -997,6 +1014,8 @@ export async function deleteCrewTicketHandler(
       return res.status(404).json({ message: "Crew ticket not found." });
     }
 
+    await removeBookingAvailabilityForTicket(id);
+
     let cancellationOutstanding: number | null = null;
     let cancellationSlotsRemaining: number | null = null;
     if (adminId) {
@@ -1051,6 +1070,7 @@ export async function deleteCrewTicketByCrewHandler(
       }
       return res.status(404).json({ message: "Crew ticket not found." });
     }
+    await removeBookingAvailabilityForTicket(ticket_id);
     return res.json({
       message: "Crew ticket cancelled successfully.",
       crewTicket: withTicketPdfAccess(cancelledTicket),

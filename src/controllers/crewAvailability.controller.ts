@@ -41,7 +41,7 @@ async function syncCrewStatus(crewId: string) {
 
 /** MD Section 3.3 — Available From = Expected Finish Date + 1 day (Phase 1 computed on read). */
 function enrichAvailabilityResponse(availability: CrewAvailability) {
-  const { employer: storedEmployer, ...restFields } = availability;
+  const { employer: storedEmployer, ticket_id, ...restFields } = availability;
   const employerParts = formatEmployerForResponse(storedEmployer);
   const available_from =
     availability.isAvailable === false
@@ -52,6 +52,7 @@ function enrichAvailabilityResponse(availability: CrewAvailability) {
     ...restFields,
     ...employerParts,
     available_from,
+    ticket_id: ticket_id ? ticket_id.toString() : undefined,
   };
 }
 

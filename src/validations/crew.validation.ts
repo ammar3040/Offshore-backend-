@@ -36,6 +36,8 @@ export const getCrewQuerySchema = Joi.object({
   availabilityStart: Joi.string().optional(),
   availabilityEnd: Joi.string().optional(),
   type: Joi.string().valid("available", "unavailable").optional(),
+  /** Calendar day used for Rig / Personnel Status / Available From on the roster. */
+  asOf: Joi.string().optional(),
   status: Joi.string()
     .valid(...Object.values(CrewStatus))
     .optional(),

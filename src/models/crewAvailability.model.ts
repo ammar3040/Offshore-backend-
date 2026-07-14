@@ -13,6 +13,8 @@ export interface CrewAvailability {
   country?: string;
   notes?: string;
   status?: string;
+  /** When set, this range was created from a crew ticket booking (removed on cancel). */
+  ticket_id?: mongoose.Types.ObjectId;
 }
 
 export interface CrewAvailabilityDocument extends Omit<CrewAvailability, "id">, Document {
@@ -33,6 +35,7 @@ const crewAvailabilitySchema = new Schema<CrewAvailabilityDocument>(
     country: { type: String, required: false },
     notes: { type: String, required: false },
     status: { type: String, enum: Object.values(CrewStatus), required: false },
+    ticket_id: { type: Schema.Types.ObjectId, ref: "CrewTicket", required: false, index: true },
   },
   { timestamps: true }
 );
@@ -54,6 +57,7 @@ export function toCrewAvailability(doc: CrewAvailabilityDocument): CrewAvailabil
     country: doc.country,
     notes: doc.notes,
     status: doc.status,
+    ticket_id: doc.ticket_id,
   };
 }
 

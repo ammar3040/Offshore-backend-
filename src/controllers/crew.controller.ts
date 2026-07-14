@@ -33,6 +33,10 @@ import {
   type Project,
   updateProject,
 } from "../models/project.model";
+import {
+  findActiveTravelTicketsForCrewIdsOnDate,
+  type CrewTicket,
+} from "../models/crewTicket.model";
 import { deleteTimesheetByCrewAndProject } from "../models/timesheet.model";
 import type { Crew } from "../models/crew.model";
 import { createAccessToken } from "../utils/jwt";
@@ -100,6 +104,41 @@ interface AvailabilityRecord {
   rig_vessel?: string;
   country?: string;
   notes?: string;
+  status?: string;
+  ticket_id?: mongoose.Types.ObjectId | string;
+}
+
+function crewIdFromTicketRef(ticket: CrewTicket): string | null {
+  const c = ticket.crew_id as unknown;
+  if (!c) return null;
+  if (typeof c === "object" && c && "_id" in (c as object)) {
+    return String((c as { _id: { toString: () => string } })._id);
+  }
+  return String(c);
+}
+
+function rigNameFromTicket(ticket: CrewTicket): string | undefined {
+  const dir = (ticket as CrewTicket & { travelDirection?: string }).travelDirection;
+  // Only Home port → Rig bookings show a destination rig on the roster/search
+  if (dir === "RIG_TO_HOME") return undefined;
+
+  const direct = ticket.rig_id as unknown;
+  if (direct && typeof direct === "object" && "name" in (direct as object)) {
+    const name = String((direct as { name?: string }).name ?? "").trim();
+    if (name) return name;
+  }
+
+  const project = ticket.project_id as unknown;
+  if (project && typeof project === "object") {
+    const projectRig = (project as { rig_id?: { name?: string } | string }).rig_id;
+    if (projectRig && typeof projectRig === "object") {
+      const name = String(projectRig.name ?? "").trim();
+      if (name) return name;
+    }
+    const title = String((project as { title?: string }).title ?? "").trim();
+    if (title) return title;
+  }
+  return undefined;
 }
 
 function parseExtendedCrewFieldsFromBody(
@@ -173,24 +212,51 @@ function computeCrewSignal(
   return crewAvailabilitySignal(activeProjects);
 }
 
-function getCurrentAssignmentFromAvails(memberAvails: AvailabilityRecord[], now = new Date()) {
+function getCurrentAssignmentFromAvails(
+  memberAvails: AvailabilityRecord[],
+  now = new Date(),
+  flightOverlay?: {
+    rig_vessel?: string;
+    travelDirection?: string;
+    notes?: string;
+    from?: Date | string;
+    to?: Date | string;
+  } | null
+) {
   const activeBlock = memberAvails.find(
-    (av) => av.isAvailable === false && isDateInRange(now, av.from, av.to)
+    (av) =>
+      (av.isAvailable === false ||
+        ((av.status || "").trim().length > 0 && (av.status || "").trim() !== "Available")) &&
+      isDateInRange(now, av.from, av.to)
   );
-  if (!activeBlock) return null;
 
-  const employerParts = formatEmployerForResponse(activeBlock.employer);
-  const available_from = addUTCDays(parseAsUTCDate(activeBlock.to), 1).toISOString();
+  if (!activeBlock && !flightOverlay) return null;
+
+  const employerParts = activeBlock ? formatEmployerForResponse(activeBlock.employer) : {};
+  const blockTo = activeBlock?.to ?? (flightOverlay?.to ? new Date(flightOverlay.to) : null);
+  const available_from = blockTo
+    ? addUTCDays(parseAsUTCDate(blockTo), 1).toISOString()
+    : undefined;
+
+  const rigVessel =
+    (flightOverlay?.travelDirection !== "RIG_TO_HOME"
+      ? flightOverlay?.rig_vessel
+      : undefined) ||
+    activeBlock?.rig_vessel ||
+    undefined;
 
   return {
     ...employerParts,
-    client: activeBlock.client,
-    rig_vessel: activeBlock.rig_vessel,
-    country: activeBlock.country,
-    from: activeBlock.from,
-    to: activeBlock.to,
-    available_from,
-    notes: activeBlock.notes,
+    client: activeBlock?.client,
+    rig_vessel: rigVessel,
+    country: activeBlock?.country,
+    from: activeBlock?.from ?? flightOverlay?.from,
+    to: activeBlock?.to ?? flightOverlay?.to,
+    ...(available_from ? { available_from } : {}),
+    notes: activeBlock?.notes || flightOverlay?.notes,
+    ...(flightOverlay?.travelDirection
+      ? { travelDirection: flightOverlay.travelDirection }
+      : {}),
   };
 }
 
@@ -496,6 +562,7 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       availableWithinDays,
       expiredCerts,
       client,
+      asOf: asOfQuery,
     } = req.query as {
       availabilityStart?: string;
       availabilityEnd?: string;
@@ -507,9 +574,17 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       availableWithinDays?: string;
       expiredCerts?: string;
       client?: string;
+      asOf?: string;
     };
 
     let filteredCrew = crew;
+
+    // Assignment / rig as-of date: search start, explicit asOf, or today (UTC noon for day matching)
+    const asOfRaw = asOfQuery || availabilityStart;
+    const asOfBase = asOfRaw ? parseAsUTCDate(asOfRaw) : parseAsUTCDate(new Date());
+    const asOf = new Date(
+      Date.UTC(asOfBase.getUTCFullYear(), asOfBase.getUTCMonth(), asOfBase.getUTCDate(), 12, 0, 0)
+    );
 
     if (availabilityStart) {
       const startSearch = parseAsUTCDate(availabilityStart);
@@ -520,36 +595,22 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
         const memberAvails = availsByCrewId.get(c.id) ?? [];
 
         if (searchType === "available") {
-          // Step 1: Build available days ONLY from explicit isAvailable=true records
-          // that overlap the search range. Crew with no availability records get 0 days.
+          // Default: every day in range is available unless an unavailable/occupied window covers it.
           const availableDays = new Set<string>();
-          const availableRecords = memberAvails.filter(
-            (av) => av.isAvailable !== false
-          );
-
-          for (const av of availableRecords) {
-            const avFrom = parseAsUTCDate(av.from);
-            const avTo = parseAsUTCDate(av.to);
-
-            // Calculate overlap between this record and the search range
-            const overlapStart = avFrom > startSearch ? avFrom : startSearch;
-            const overlapEnd = avTo < endSearch ? avTo : endSearch;
-
-            if (overlapStart <= overlapEnd) {
-              let d = new Date(overlapStart);
-              const endD = new Date(overlapEnd);
-              while (d <= endD) {
-                availableDays.add(toUTCDateString(d));
-                d = addUTCDays(d, 1);
-              }
-            }
+          let d = new Date(startSearch);
+          const endFill = new Date(endSearch);
+          while (d <= endFill) {
+            availableDays.add(toUTCDateString(d));
+            d = addUTCDays(d, 1);
           }
 
-          // Step 2: Remove any days that are covered by unavailable records
-          const unavailableRecords = memberAvails.filter(
-            (av) => av.isAvailable === false
-          );
-          for (const av of unavailableRecords) {
+          const occupiedRecords = memberAvails.filter((av) => {
+            if (av.isAvailable === false) return true;
+            const status = (av.status || "").trim();
+            return status.length > 0 && status !== "Available";
+          });
+
+          for (const av of occupiedRecords) {
             const avFrom = parseAsUTCDate(av.from);
             const avTo = parseAsUTCDate(av.to);
 
@@ -566,15 +627,16 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
             }
           }
 
-          // Only include crew that have at least 1 explicitly available day in range
           (c as Record<string, unknown>).availableDays = availableDays.size;
           return availableDays.size >= 1;
         } else {
           // searchType === "unavailable"
-          // Collect unavailable records that overlap
-          const unavailableRecords = memberAvails.filter(
-            (av) => av.isAvailable === false
-          );
+          // Collect occupied / unavailable records that overlap (including booking blocks)
+          const unavailableRecords = memberAvails.filter((av) => {
+            if (av.isAvailable === false) return true;
+            const status = (av.status || "").trim();
+            return status.length > 0 && status !== "Available";
+          });
 
           const coveredDays = new Set<string>();
           for (const av of unavailableRecords) {
@@ -638,15 +700,59 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
     }
 
     const now = new Date();
+    const flightTicketsOnDate = await findActiveTravelTicketsForCrewIdsOnDate(
+      filteredCrew.map((c) => c.id),
+      asOf
+    );
+    const flightByCrewId = new Map<string, CrewTicket>();
+    for (const ticket of flightTicketsOnDate) {
+      const cid = crewIdFromTicketRef(ticket);
+      if (!cid || flightByCrewId.has(cid)) continue;
+      flightByCrewId.set(cid, ticket);
+    }
+
     const crewWithSignal = filteredCrew.map((c) => {
       const activeProjects = activeByCrewId.get(c.id) ?? [];
       const memberAvails = availsByCrewId.get(c.id) ?? [];
-      const signal = computeCrewSignal(activeProjects, memberAvails, now);
-      const currentAssignment = getCurrentAssignmentFromAvails(memberAvails, now);
+      const signal = computeCrewSignal(activeProjects, memberAvails, asOf);
+      const flightTicket = flightByCrewId.get(c.id);
+      const flightOverlay = flightTicket
+        ? {
+            rig_vessel: rigNameFromTicket(flightTicket),
+            travelDirection:
+              (flightTicket as CrewTicket & { travelDirection?: string }).travelDirection ||
+              "HOME_TO_RIG",
+            notes: `Flight ${flightTicket.bookingReference?.trim() || flightTicket.id}`,
+            from: flightTicket.travelStart,
+            to: flightTicket.travelEnd,
+          }
+        : null;
+      const currentAssignment = getCurrentAssignmentFromAvails(memberAvails, asOf, flightOverlay);
       const expiryWarnings = computeExpiryWarnings(c, now);
+
+      // Prefer booking/calendar status for the as-of day over stale current_status when occupied
+      let current_status = c.current_status;
+      if (flightTicket || currentAssignment) {
+        const occupiedStatus = memberAvails.find(
+          (av) =>
+            (av.isAvailable === false ||
+              ((av.status || "").trim().length > 0 &&
+                (av.status || "").trim() !== "Available")) &&
+            isDateInRange(asOf, av.from, av.to)
+        );
+        if (occupiedStatus?.status) {
+          current_status = occupiedStatus.status as typeof c.current_status;
+        } else if (flightTicket) {
+          current_status =
+            flightTicket.status === "APPROVED"
+              ? CrewStatus.OnAssignment
+              : CrewStatus.Confirmed;
+        }
+      }
 
       return {
         ...c,
+        current_status,
         activeProjects,
         signal,
         ...(currentAssignment ? { currentAssignment } : {}),
@@ -704,13 +810,47 @@ export async function getCrewById(
     });
 
     const now = new Date();
-    const signal = computeCrewSignal(activeProjects, memberAvails, now);
+    const asOf = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 12, 0, 0)
+    );
+    const signal = computeCrewSignal(activeProjects, memberAvails, asOf);
 
-    const currentAssignment = getCurrentAssignmentFromAvails(memberAvails, now);
+    const flightTickets = await findActiveTravelTicketsForCrewIdsOnDate([crew_id], asOf);
+    const flightTicket = flightTickets[0];
+    const flightOverlay = flightTicket
+      ? {
+          rig_vessel: rigNameFromTicket(flightTicket),
+          travelDirection:
+            (flightTicket as CrewTicket & { travelDirection?: string }).travelDirection ||
+            "HOME_TO_RIG",
+          notes: `Flight ${flightTicket.bookingReference?.trim() || flightTicket.id}`,
+          from: flightTicket.travelStart,
+          to: flightTicket.travelEnd,
+        }
+      : null;
+    const currentAssignment = getCurrentAssignmentFromAvails(memberAvails, asOf, flightOverlay);
     const expiryWarnings = computeExpiryWarnings(crew, now);
+
+    let current_status = crew.current_status;
+    if (flightTicket || currentAssignment) {
+      const occupiedStatus = memberAvails.find(
+        (av) =>
+          (av.isAvailable === false ||
+            ((av.status || "").trim().length > 0 &&
+              (av.status || "").trim() !== "Available")) &&
+          isDateInRange(asOf, av.from, av.to)
+      );
+      if (occupiedStatus?.status) {
+        current_status = occupiedStatus.status as typeof crew.current_status;
+      } else if (flightTicket) {
+        current_status =
+          flightTicket.status === "APPROVED" ? CrewStatus.OnAssignment : CrewStatus.Confirmed;
+      }
+    }
 
     const crewObj = {
       ...crew,
+      current_status,
       signal,
       ...(currentAssignment ? { currentAssignment } : {}),
       expiryWarnings,

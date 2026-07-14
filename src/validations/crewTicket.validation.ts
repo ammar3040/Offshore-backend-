@@ -171,4 +171,5 @@ export const bookFlightSchema = Joi.object({
   price: Joi.number().min(0).default(0),
   /** Currency of price, cashback (e.g. from search). Default GBP. */
   currency: Joi.string().trim().length(3).default("GBP"),
+  travelDirection: Joi.string().valid("HOME_TO_RIG", "RIG_TO_HOME").optional().default("HOME_TO_RIG"),
 });

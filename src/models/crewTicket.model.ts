@@ -101,6 +101,8 @@ export interface CrewTicket {
   travelStart?: Date;
   /** Last leg arrival — used with travelStart for duplicate detection */
   travelEnd?: Date;
+  /** Mobilization direction for this booking */
+  travelDirection?: "HOME_TO_RIG" | "RIG_TO_HOME";
   /** Search/book flight payload for ticket emails */
   flightSnapshot?: CrewTicketFlightSnapshot;
 }
@@ -209,6 +211,11 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
     cashback: { type: Number, required: true, default: 0 },
     travelStart: { type: Date, required: false },
     travelEnd: { type: Date, required: false },
+    travelDirection: {
+      type: String,
+      enum: ["HOME_TO_RIG", "RIG_TO_HOME"],
+      required: false,
+    },
     flightSnapshot: { type: flightSnapshotSchema, required: false },
   },
   { timestamps: true }
@@ -247,6 +254,7 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     cashback: doc.cashback ?? 0,
     travelStart: doc.travelStart,
     travelEnd: doc.travelEnd,
+    travelDirection: doc.travelDirection,
     flightSnapshot: doc.flightSnapshot,
   };
 }
@@ -268,6 +276,63 @@ export async function findCrewTicketsByCrewId(crewId: string): Promise<CrewTicke
     .populate("project_id")
     .populate("rig_id");
   return docs.map((doc) => toCrewTicket(doc));
+}
+
+function ticketTravelDayBounds(ticket: CrewTicket): { from: Date; to: Date } | null {
+  if (ticket.travelStart && ticket.travelEnd) {
+    const from = new Date(ticket.travelStart);
+    const to = new Date(ticket.travelEnd);
+    if (!Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime())) {
+      return from <= to ? { from, to } : { from: to, to: from };
+    }
+  }
+  const legs = ticket.flightSnapshot?.legs ?? [];
+  if (legs.length === 0) return null;
+  const first = legs[0];
+  const last = legs[legs.length - 1];
+  const dep = first.departureTime || first.itinerary?.[0]?.departureTime;
+  const arr =
+    last.arrivalTime ||
+    last.itinerary?.[last.itinerary.length - 1]?.arrivalTime ||
+    first.arrivalTime;
+  if (!dep) return null;
+  const from = new Date(dep);
+  const to = arr ? new Date(arr) : from;
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return null;
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+/** Active (non-cancelled) tickets whose travel window covers the given calendar day (UTC). */
+export async function findActiveTravelTicketsForCrewIdsOnDate(
+  crewIds: string[],
+  asOf: Date
+): Promise<CrewTicket[]> {
+  const validIds = crewIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+  if (validIds.length === 0) return [];
+
+  const dayStart = new Date(
+    Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate(), 0, 0, 0, 0)
+  );
+  const dayEnd = new Date(
+    Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate(), 23, 59, 59, 999)
+  );
+
+  const docs = await CrewTicketModel.find({
+    crew_id: { $in: validIds.map((id) => new mongoose.Types.ObjectId(id)) },
+    status: { $ne: CrewTicketStatus.Cancelled },
+  })
+    .sort({ createdAt: -1 })
+    .populate("crew_id")
+    .populate({ path: "project_id", populate: { path: "rig_id" } })
+    .populate("rig_id");
+
+  return docs
+    .map((doc) => toCrewTicket(doc))
+    .filter((ticket) => {
+      const bounds = ticketTravelDayBounds(ticket);
+      if (!bounds) return false;
+      return bounds.from.getTime() <= dayEnd.getTime() && bounds.to.getTime() >= dayStart.getTime();
+    });
 }
 
 export interface CrewTicketListOptions {
