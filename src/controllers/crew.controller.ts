@@ -119,7 +119,7 @@ function crewIdFromTicketRef(ticket: CrewTicket): string | null {
 
 function rigNameFromTicket(ticket: CrewTicket): string | undefined {
   const dir = (ticket as CrewTicket & { travelDirection?: string }).travelDirection;
-  // Only Home port → Rig bookings show a destination rig on the roster/search
+  // Only On signer bookings show a destination rig on the roster/search
   if (dir === "RIG_TO_HOME") return undefined;
 
   const direct = ticket.rig_id as unknown;
@@ -550,7 +550,6 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       availsByCrewId.get(cid)!.push(av);
     }
 
-    // Parse query params for date filtering and mobilization filters (MD Section 7)
     const {
       availabilityStart,
       availabilityEnd,
@@ -563,6 +562,7 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       expiredCerts,
       client,
       asOf: asOfQuery,
+      projectId: projectIdQuery,
     } = req.query as {
       availabilityStart?: string;
       availabilityEnd?: string;
@@ -575,6 +575,7 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       expiredCerts?: string;
       client?: string;
       asOf?: string;
+      projectId?: string;
     };
 
     let filteredCrew = crew;
@@ -699,6 +700,38 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
       });
     }
 
+    // Project-based availability filter: only show crew fully available for the project duration
+    if (projectIdQuery && mongoose.Types.ObjectId.isValid(projectIdQuery)) {
+      const filterProject = await findProjectById(projectIdQuery);
+      if (filterProject && filterProject.duration?.startDate && filterProject.duration?.endDate) {
+        const projStart = parseAsUTCDate(filterProject.duration.startDate);
+        const projEnd = parseAsUTCDate(filterProject.duration.endDate);
+
+        // Build set of all days in project range
+        filteredCrew = filteredCrew.filter((c) => {
+          const memberAvails = availsByCrewId.get(c.id) ?? [];
+
+          // Check if any occupied/unavailable record overlaps with the project range
+          const occupiedRecords = memberAvails.filter((av) => {
+            if (av.isAvailable === false) return true;
+            const avStatus = (av.status || "").trim();
+            return avStatus.length > 0 && avStatus !== "Available";
+          });
+
+          for (const av of occupiedRecords) {
+            const avFrom = parseAsUTCDate(av.from);
+            const avTo = parseAsUTCDate(av.to);
+            // Check if there's any overlap between occupied range and project range
+            if (avFrom <= projEnd && avTo >= projStart) {
+              return false; // Crew has occupied days in this project range, exclude them
+            }
+          }
+
+          return true; // No overlapping occupied records, crew is available
+        });
+      }
+    }
+
     const now = new Date();
     const flightTicketsOnDate = await findActiveTravelTicketsForCrewIdsOnDate(
       filteredCrew.map((c) => c.id),
@@ -745,7 +778,7 @@ export async function getCrew(req: AuthenticatedRequest, res: Response) {
         } else if (flightTicket) {
           current_status =
             flightTicket.status === "APPROVED"
-              ? CrewStatus.OnAssignment
+              ? CrewStatus.InFlight
               : CrewStatus.Confirmed;
         }
       }
@@ -844,7 +877,7 @@ export async function getCrewById(
         current_status = occupiedStatus.status as typeof crew.current_status;
       } else if (flightTicket) {
         current_status =
-          flightTicket.status === "APPROVED" ? CrewStatus.OnAssignment : CrewStatus.Confirmed;
+          flightTicket.status === "APPROVED" ? CrewStatus.InFlight : CrewStatus.Confirmed;
       }
     }
 

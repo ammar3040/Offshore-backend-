@@ -53,6 +53,7 @@ export const getCrewQuerySchema = Joi.object({
   availableWithinDays: Joi.number().integer().min(1).max(365).optional(),
   expiredCerts: Joi.string().valid("true", "false").optional(),
   client: Joi.string().trim().max(200).optional(),
+  projectId: objectId.optional(),
 });
 
 export function parseSecondarySkills(raw: unknown): string[] | undefined {

@@ -24,6 +24,8 @@ export enum CrewStatus {
   Available = "Available",
   Offered = "Offered",
   Confirmed = "Confirmed",
+  InFlight = "In Flight",
+  InProject = "In Project",
   OnAssignment = "On assignment for us",
   OffshoreCompetitor = "Offshore (Competitor)",
   Holiday = "Holiday / Not Available",

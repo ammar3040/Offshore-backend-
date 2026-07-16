@@ -5,6 +5,7 @@ import {
   createCrewAvailability,
 } from "../models/crewAvailability.model";
 import { CrewTicketStatus, type CrewTicket } from "../models/crewTicket.model";
+import { findProjectById, type Project } from "../models/project.model";
 
 /** Parse YYYY-MM-DD (or leading date of ISO) into a stable UTC-noon Date for calendar day matching. */
 function calendarDateFromValue(value?: string | Date | null): Date | null {
@@ -82,17 +83,10 @@ async function syncCrewCurrentStatus(crewId: string): Promise<void> {
   await CrewModel.findByIdAndUpdate(crewId, { current_status: status });
 }
 
-function bookingStatusForTicket(ticketStatus: string | undefined): string {
-  // Pending/approval bookings occupy days with Confirmed; approved → On assignment
-  return ticketStatus === CrewTicketStatus.Approved
-    ? CrewStatus.OnAssignment
-    : CrewStatus.Confirmed;
-}
-
 function directionNote(ticket: CrewTicket): string {
   const dir = (ticket as CrewTicket & { travelDirection?: string }).travelDirection;
-  if (dir === "RIG_TO_HOME") return "Rig → Home port";
-  if (dir === "HOME_TO_RIG") return "Home port → Rig";
+  if (dir === "RIG_TO_HOME") return "Off signer";
+  if (dir === "HOME_TO_RIG") return "On signer";
   return "";
 }
 
@@ -130,9 +124,59 @@ function rigVesselFromTicket(ticket: CrewTicket): string | undefined {
   return undefined;
 }
 
+/** Add one day to a UTC-noon date. */
+function addUTCDay(date: Date, days = 1): Date {
+  return new Date(Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate() + days,
+    12, 0, 0
+  ));
+}
+
+/**
+ * Resolve the project associated with a ticket.
+ * First tries the populated project_id on the ticket, then falls back to DB lookup.
+ */
+async function resolveProject(ticket: CrewTicket): Promise<Project | null> {
+  const projectRef = ticket.project_id;
+  if (!projectRef) return null;
+
+  // If already populated as an object with duration
+  if (typeof projectRef === "object" && "duration" in (projectRef as object)) {
+    const proj = projectRef as unknown as Project;
+    if (proj.duration?.startDate && proj.duration?.endDate) return proj;
+  }
+
+  // Resolve the ObjectId
+  const projectIdStr = typeof projectRef === "object" && "_id" in (projectRef as object)
+    ? String((projectRef as { _id: unknown })._id)
+    : String(projectRef);
+
+  if (!mongoose.Types.ObjectId.isValid(projectIdStr)) return null;
+  return findProjectById(projectIdStr);
+}
+
+/**
+ * Determine the status label for the flight availability record.
+ */
+function flightStatusForTicket(ticketStatus: string | undefined): string {
+  if (ticketStatus === CrewTicketStatus.Approved) {
+    return CrewStatus.InFlight;
+  }
+  // Unapproved bookings show as Confirmed
+  return CrewStatus.Confirmed;
+}
+
 /**
  * When a crew ticket is created/approved, occupy travel days on the availability calendar.
- * Linked via ticket_id so cancel can remove the block cleanly.
+ *
+ * Direction-based logic:
+ * - UNAPPROVED (any direction): flight dates → "Confirmed"
+ * - APPROVED + HOME_TO_RIG: flight dates → "In Flight" + remaining project dates → "In Project"
+ * - APPROVED + RIG_TO_HOME: flight dates → "In Flight" only (project completed, crew returning)
+ *
+ * Linked via ticket_id (flight block) and project_id (project block) so cancel can remove cleanly.
  */
 export async function upsertBookingAvailabilityForTicket(ticket: CrewTicket): Promise<void> {
   const crewId = crewIdFromTicket(ticket);
@@ -150,37 +194,94 @@ export async function upsertBookingAvailabilityForTicket(ticket: CrewTicket): Pr
   }
 
   const ticketObjectId = new mongoose.Types.ObjectId(ticket.id);
-  const status = bookingStatusForTicket(ticket.status);
-  const existing = await CrewAvailabilityModel.findOne({ ticket_id: ticketObjectId });
-  const dir = directionNote(ticket);
+  const crewObjectId = new mongoose.Types.ObjectId(crewId);
+  const dir = travelDirectionOf(ticket);
+  const dirNote = directionNote(ticket);
   const rigVessel = rigVesselFromTicket(ticket);
-  const notes = [
+  const isApproved = ticket.status === CrewTicketStatus.Approved;
+
+  // --- FLIGHT AVAILABILITY RECORD ---
+  const flightStatus = flightStatusForTicket(ticket.status);
+  const flightNotes = [
     `Flight booking ${ticket.bookingReference?.trim() || ticket.id}`,
     ticket.status,
-    dir || null,
+    dirNote || null,
   ]
     .filter(Boolean)
     .join(" · ");
 
-  if (existing) {
-    existing.from = bounds.from;
-    existing.to = bounds.to;
-    existing.isAvailable = false;
-    existing.status = status;
-    existing.notes = notes;
-    existing.rig_vessel = rigVessel;
-    await existing.save();
+  const existingFlight = await CrewAvailabilityModel.findOne({ ticket_id: ticketObjectId, project_id: { $exists: false } });
+  // Also check for ones where project_id is null (legacy flight-only records)
+  const existingFlightAlt = !existingFlight
+    ? await CrewAvailabilityModel.findOne({ ticket_id: ticketObjectId, project_id: null })
+    : null;
+  const flightRecord = existingFlight || existingFlightAlt;
+
+  if (flightRecord) {
+    flightRecord.from = bounds.from;
+    flightRecord.to = bounds.to;
+    flightRecord.isAvailable = false;
+    flightRecord.status = flightStatus;
+    flightRecord.notes = flightNotes;
+    flightRecord.rig_vessel = rigVessel;
+    await flightRecord.save();
   } else {
     await createCrewAvailability({
-      crew_id: new mongoose.Types.ObjectId(crewId),
+      crew_id: crewObjectId,
       from: bounds.from,
       to: bounds.to,
       isAvailable: false,
-      status,
-      notes,
+      status: flightStatus,
+      notes: flightNotes,
       ...(rigVessel ? { rig_vessel: rigVessel } : {}),
       ticket_id: ticketObjectId,
     });
+  }
+
+  // --- PROJECT DURATION RECORD (only for APPROVED + HOME_TO_RIG) ---
+  // Remove any existing project block for this ticket first
+  await CrewAvailabilityModel.deleteMany({
+    ticket_id: ticketObjectId,
+    project_id: { $exists: true, $ne: null },
+  });
+
+  if (isApproved && dir === "HOME_TO_RIG") {
+    const project = await resolveProject(ticket);
+    if (project && project.duration?.startDate && project.duration?.endDate) {
+      const projectStart = calendarDateFromValue(project.duration.startDate);
+      const projectEnd = calendarDateFromValue(project.duration.endDate);
+      const dayAfterFlight = addUTCDay(bounds.to);
+
+      if (projectStart && projectEnd && dayAfterFlight <= projectEnd) {
+        // The "In Project" block starts the day after flight ends and goes to project end
+        const projectBlockStart = dayAfterFlight;
+        const projectBlockEnd = projectEnd;
+
+        const projectObjectId = typeof project.id === "string"
+          ? new mongoose.Types.ObjectId(project.id)
+          : (project as unknown as { _id: mongoose.Types.ObjectId })._id;
+
+        const projectNotes = [
+          `Project: ${project.title}`,
+          `${projectBlockStart.toISOString().split("T")[0]} → ${projectBlockEnd.toISOString().split("T")[0]}`,
+          dirNote || null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+
+        await createCrewAvailability({
+          crew_id: crewObjectId,
+          from: projectBlockStart,
+          to: projectBlockEnd,
+          isAvailable: false,
+          status: CrewStatus.InProject,
+          notes: projectNotes,
+          ...(rigVessel ? { rig_vessel: rigVessel } : {}),
+          ticket_id: ticketObjectId,
+          project_id: projectObjectId,
+        });
+      }
+    }
   }
 
   await syncCrewCurrentStatus(crewId);
