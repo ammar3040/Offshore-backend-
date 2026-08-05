@@ -8,6 +8,12 @@ const visaDetailsSchema = Joi.object({
   visa_country: Joi.string().optional().allow(""),
   visa_issue_date: Joi.string().optional().allow(""),
   visa_expiry_date: Joi.string().optional().allow(""),
+  vevo_document_type: Joi.string().optional().allow(""),
+  vevo_reference_type: Joi.string().optional().allow(""),
+  vevo_reference_number: Joi.string().optional().allow(""),
+  visa_subclass: Joi.string().optional().allow(""),
+  visa_conditions: Joi.string().optional().allow(""),
+  last_vevo_checked_at: Joi.string().optional().allow(""),
 });
 
 /** Extended profile fields for create/update (MD Section 6 — Crew). */

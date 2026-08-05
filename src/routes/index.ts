@@ -13,6 +13,8 @@ import projectRoutes from "./project.routes";
 import rigRoutes from "./rig.routes";
 import timesheetRoutes from "./timesheet.routes";
 
+import visaRoutes from "./visa.routes";
+
 const router = Router();
 
 // Example route
@@ -33,6 +35,8 @@ router.use("/payroll", payrollRoutes);
 router.use("/project", projectRoutes);
 router.use("/rig", rigRoutes);
 router.use("/timesheet", timesheetRoutes);
+router.use("/visa", visaRoutes);
+router.use("/api/visa", visaRoutes);
 
 export default router;
 

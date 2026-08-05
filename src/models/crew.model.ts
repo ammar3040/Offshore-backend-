@@ -32,10 +32,30 @@ export enum CrewStatus {
   Inactive = "Unknown / Inactive",
 }
 
+/** VEVO (Visa Entitlement Verification Online) reference types used on immi.gov.au. */
+export type VevoDocumentType = "Passport" | "ImmiCard" | "Travel Document";
+export type VevoReferenceType =
+  | "Transaction Reference Number (TRN)"
+  | "Visa Grant Number"
+  | "Visa Evidence Number"
+  | "Password";
+
 export interface VisaDetails {
   visa_country?: string;
   visa_issue_date?: string;
   visa_expiry_date?: string;
+  /** VEVO enquiry: Document type */
+  vevo_document_type?: VevoDocumentType | string;
+  /** VEVO enquiry: Reference type */
+  vevo_reference_type?: VevoReferenceType | string;
+  /** VEVO enquiry: TRN / grant / evidence number / password value */
+  vevo_reference_number?: string;
+  /** Optional visa subclass / class from grant notice or VEVO result */
+  visa_subclass?: string;
+  /** Work rights / conditions noted after a VEVO check */
+  visa_conditions?: string;
+  /** When the crew last verified entitlements on VEVO (YYYY-MM-DD) */
+  last_vevo_checked_at?: string;
 }
 
 export interface Passport {
@@ -170,6 +190,12 @@ const crewSchema = new Schema<CrewDocument>(
       visa_country: { type: String },
       visa_issue_date: { type: String },
       visa_expiry_date: { type: String },
+      vevo_document_type: { type: String },
+      vevo_reference_type: { type: String },
+      vevo_reference_number: { type: String },
+      visa_subclass: { type: String },
+      visa_conditions: { type: String },
+      last_vevo_checked_at: { type: String },
     },
   },
   { timestamps: true }
