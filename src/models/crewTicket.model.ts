@@ -60,6 +60,8 @@ export interface CrewTicketFlightSnapshot {
   fares?: StoredFlightFare[];
   /** Display currency for fare in emails (e.g. INR from search). */
   currency?: string;
+  /** Which inventory supplied this itinerary. */
+  supplier?: "riya" | "travelterminus";
 }
 
 export interface CrewTicket {
@@ -105,6 +107,8 @@ export interface CrewTicket {
   travelDirection?: "HOME_TO_RIG" | "RIG_TO_HOME";
   /** Search/book flight payload for ticket emails */
   flightSnapshot?: CrewTicketFlightSnapshot;
+  /** Inventory source: Riya Marine or Travel Terminus */
+  supplier?: "riya" | "travelterminus";
 }
 
 export interface CrewTicketDocument extends Omit<CrewTicket, "id">, Document {
@@ -168,6 +172,7 @@ const flightSnapshotSchema = new Schema<CrewTicketFlightSnapshot>(
     legs: { type: [flightLegSchema], default: [] },
     fares: { type: [flightFareSchema], default: [] },
     currency: { type: String, required: false },
+    supplier: { type: String, enum: ["riya", "travelterminus"], required: false },
   },
   { _id: false }
 );
@@ -217,6 +222,7 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
       required: false,
     },
     flightSnapshot: { type: flightSnapshotSchema, required: false },
+    supplier: { type: String, enum: ["riya", "travelterminus"], required: false, default: "riya" },
   },
   { timestamps: true }
 );
@@ -256,6 +262,7 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     travelEnd: doc.travelEnd,
     travelDirection: doc.travelDirection,
     flightSnapshot: doc.flightSnapshot,
+    supplier: doc.supplier === "travelterminus" ? "travelterminus" : doc.supplier === "riya" ? "riya" : undefined,
   };
 }
 

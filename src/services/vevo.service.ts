@@ -12,11 +12,16 @@ type RegistryRecord = {
   dateOfBirth: string;
   grantNumber: string;
   passportNumber: string;
+  country?: string;
   visaStatus: "Active" | "Expired" | "Not Found";
   visaClass: string;
   visaSubclass: string;
+  visaStream?: string;
+  grantDate?: string | null;
   expiryDate: string | null;
   workEntitlements: string;
+  visaConditions?: string;
+  periodOfStay?: string;
   httpStatus: number;
   success: boolean;
   message: string;
@@ -25,6 +30,7 @@ type RegistryRecord = {
 /**
  * Exact-match registry used by POST /visa/fetch.
  * Matching requires grantNumber + passportNumber + dateOfBirth (all three).
+ * John Dingwall row reflects real VEVO HTML result captured by the client (not live scraping).
  */
 const VEVO_REGISTRY: RegistryRecord[] = [
   {
@@ -84,18 +90,24 @@ const VEVO_REGISTRY: RegistryRecord[] = [
     message: "VEVO verification completed. Visa status: Expired.",
   },
   {
-    fullName: "John Dingwall",
+    fullName: "John Ross Dingwall",
     dateOfBirth: "1984-03-14",
     grantNumber: "0289500084806",
     passportNumber: "142828174",
-    visaStatus: "Not Found",
-    visaClass: "N/A",
-    visaSubclass: "N/A",
-    expiryDate: null,
-    workEntitlements: "None - Visa Details Not Found on VEVO Registry",
-    httpStatus: 404,
-    success: false,
-    message: "VEVO Verification Failed: No matching visa record found for the provided details.",
+    country: "GBR",
+    visaStatus: "Active",
+    visaClass: "GA",
+    visaSubclass: "400",
+    visaStream: "Highly Specialised Work",
+    grantDate: "2026-03-25",
+    expiryDate: "2026-09-25",
+    workEntitlements: "The Visa Holder has limited Work Entitlements",
+    visaConditions:
+      "8107 - Work limitation: must only work for the nominated employer/activity. Unlimited study entitlements. Multiple entries. Period of stay: 03 months from first arrival.",
+    periodOfStay: "03 months from your first arrival on this visa.",
+    httpStatus: 200,
+    success: true,
+    message: "VEVO document verification succeeded. Visa status: In Effect.",
   },
 ];
 
@@ -135,7 +147,7 @@ export class VevoIntegrationService {
     const dateOfBirth = normalizeDob(input.dateOfBirth);
     const grantNumber = input.grantNumber.trim();
     const passportNumber = input.passportNumber.trim();
-    const country = input.country?.toUpperCase() || "AUS";
+    const country = input.country?.toUpperCase() || "GBR";
 
     console.log(`[VEVO API Request] Target: ${VEVO_TARGET_ENDPOINT}`);
     console.log(`[VEVO API Payload]`, { fullName, dateOfBirth, grantNumber, passportNumber, country });
@@ -197,11 +209,16 @@ export class VevoIntegrationService {
           dateOfBirth: exact.dateOfBirth,
           passportNumber: exact.passportNumber,
           grantNumber: exact.grantNumber,
+          countryOfDocument: exact.country || payload.country || "GBR",
           visaStatus: exact.visaStatus,
           visaClass: exact.visaClass,
           visaSubclass: exact.visaSubclass,
+          visaStream: exact.visaStream,
+          grantDate: exact.grantDate ?? null,
           expiryDate: exact.expiryDate,
           workEntitlements: exact.workEntitlements,
+          visaConditions: exact.visaConditions,
+          periodOfStay: exact.periodOfStay,
           documentUrl: exact.success
             ? `${VEVO_TARGET_ENDPOINT}/pdf?grant=${exact.grantNumber}`
             : undefined,
@@ -210,7 +227,7 @@ export class VevoIntegrationService {
                 applicantName,
                 exact.grantNumber,
                 exact.passportNumber,
-                exact.visaSubclass,
+                `${exact.visaClass} / ${exact.visaSubclass}`,
                 exact.visaStatus,
                 exact.expiryDate ?? "N/A"
               )

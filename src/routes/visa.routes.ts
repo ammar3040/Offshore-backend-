@@ -21,4 +21,22 @@ router.post("/fetch", visaController.fetchVisaDetails);
  */
 router.post("/batch-fetch", visaController.batchFetchVisaDetails);
 
+/**
+ * @route GET /api/visa/provider
+ * @desc  Reports whether the live VEVO provider is configured
+ */
+router.get("/provider", visaController.getProviderStatus);
+
+/**
+ * @route POST /api/visa/check
+ * @desc  Runs a live VEVO check via the provider and saves it to the crew record
+ */
+router.post("/check", visaController.liveCheck);
+
+/**
+ * @route POST /api/visa/check-batch
+ * @desc  Runs live VEVO checks for many crew and returns expiry verdicts
+ */
+router.post("/check-batch", visaController.liveBatchCheck);
+
 export default router;

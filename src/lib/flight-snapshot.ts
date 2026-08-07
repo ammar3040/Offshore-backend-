@@ -5,6 +5,7 @@ type BookFlightPayload = {
   airlineName?: string;
   airlineCode?: string;
   originalCurrency?: string;
+  supplier?: "riya" | "travelterminus" | string;
   legs?: unknown[];
   fares?: Array<{
     totalFare?: number;
@@ -76,6 +77,9 @@ export function buildFlightSnapshotFromBookPayload(
       },
     ],
     currency: currency || flight.originalCurrency || "GBP",
+    ...(flight.supplier === "travelterminus" || flight.supplier === "riya"
+      ? { supplier: flight.supplier }
+      : {}),
   };
 }
 

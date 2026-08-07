@@ -38,6 +38,16 @@ import {
   buildFlightSnapshotFromBookPayload,
   buildFlightTicketDataFromCrewTicket,
 } from "../lib/flight-snapshot";
+import {
+  isTravelTerminusConfigured,
+  searchTravelTerminusFlights,
+} from "../services/flight-suppliers/travelTerminus.service";
+import {
+  rankByDurationThenPrice,
+  resolveSupplierFromFlight,
+  stripInternalFlightFields,
+  tagSupplier,
+} from "../services/flight-suppliers/mergeFlights";
 import { fetchRiyaGetcity, normalizeRiyaAirports, type RiyaAirportItem } from "../lib/riya-airports";
 import { distanceKmBetween, getAirportCoordinatesByIata } from "../lib/airport-coordinates";
 import type { AuthenticatedRequest } from "../middleware/auth";
@@ -535,6 +545,7 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       crew_ids?: string[];
       flight: {
         id: string;
+        supplier?: string;
         legs: Array<{
           itinerary?: Array<{
             fromAirport?: string;
@@ -685,8 +696,9 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
 
     const created: import("../models/crewTicket.model").CrewTicket[] = [];
     let runningBalance = body.project_id ? await sumMarkupByProject(body.project_id) : 0;
+    const supplier = resolveSupplierFromFlight(fl);
     const flightSnapshot = buildFlightSnapshotFromBookPayload(
-      fl,
+      { ...fl, supplier },
       requestCurrency,
       payloadPriceRaw
     );
@@ -714,6 +726,7 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
         balance: runningBalance,
         price: priceGBP,
         cashback: cashbackGBP,
+        supplier,
         ...(travelBounds
           ? { travelStart: travelBounds.travelStart, travelEnd: travelBounds.travelEnd }
           : {}),
@@ -1319,10 +1332,15 @@ function summarizeFlightDirection(legs: unknown[], directionStops?: number) {
 function combineRoundTripFlights(outboundFlight: any, inboundFlight: any, outboundRaw: any, inboundRaw: any) {
   const outbound = summarizeFlightDirection(outboundFlight.legs, outboundFlight.stops);
   const inbound = summarizeFlightDirection(inboundFlight.legs, inboundFlight.stops);
+  const supplier =
+    outboundFlight.supplier === "travelterminus" || inboundFlight.supplier === "travelterminus"
+      ? "travelterminus"
+      : outboundFlight.supplier || inboundFlight.supplier || "riya";
 
   return {
     id: `rt-${outboundFlight.id}-${inboundFlight.id}`,
     tripType: "round-trip" as const,
+    supplier,
     outbound,
     inbound,
     /** Whole-trip bounds: outbound departure through return arrival. */
@@ -1357,6 +1375,34 @@ function combineRoundTripFlights(outboundFlight: any, inboundFlight: any, outbou
     cashback: outboundFlight.cashback ?? inboundFlight.cashback ?? null,
     appliedIncentive: outboundFlight.appliedIncentive ?? inboundFlight.appliedIncentive ?? null,
     originalCurrency: outboundFlight.originalCurrency ?? inboundFlight.originalCurrency,
+  };
+}
+
+/** Shape a TravelTerminus multi-leg RT offer into the same RT bundle the UI expects. */
+function shapeTravelTerminusRoundTrip(flight: any): any | null {
+  const legs = Array.isArray(flight?.legs) ? flight.legs : [];
+  if (legs.length < 2) return null;
+  const mid = Math.ceil(legs.length / 2);
+  const outLegs = legs.slice(0, mid);
+  const inLegs = legs.slice(mid);
+  if (!outLegs.length || !inLegs.length) return null;
+
+  const outboundStops = outLegs.reduce((n: number, l: any) => n + (l.stops ?? 0), 0);
+  const inboundStops = inLegs.reduce((n: number, l: any) => n + (l.stops ?? 0), 0);
+  const outbound = summarizeFlightDirection(outLegs, outboundStops);
+  const inbound = summarizeFlightDirection(inLegs, inboundStops);
+
+  return {
+    ...flight,
+    id: flight.id?.startsWith("rt-") ? flight.id : `rt-${flight.id}`,
+    tripType: "round-trip" as const,
+    supplier: "travelterminus",
+    outbound,
+    inbound,
+    departureTime: outbound.departureTime,
+    arrivalTime: inbound.arrivalTime,
+    legs: [...outLegs, ...inLegs],
+    stops: outboundStops + inboundStops,
   };
 }
 
@@ -1947,7 +1993,27 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
     };
 
     if (tripType === "round-trip") {
-      const [outboundData, inboundData] = await Promise.all([
+      const ttSearchPromise = isTravelTerminusConfigured()
+        ? searchTravelTerminusFlights({
+            origin: fromData.code,
+            destination: toData.code,
+            departureDate: departureDate || departureSearchDates[0] || "",
+            returnDate: returnDate || undefined,
+            adults,
+            children,
+            infants,
+            cabinClass,
+            currency,
+            tripType: "round-trip",
+            endUserIP: typeof req.ip === "string" ? req.ip : undefined,
+            endUserBrowserAgent: req.get("user-agent") || undefined,
+          }).catch((err) => {
+            console.error("[search-flights] TravelTerminus RT error:", err?.message || err);
+            return [] as any[];
+          })
+        : Promise.resolve([] as any[]);
+
+      const [outboundData, inboundData, ttRaw] = await Promise.all([
         fetchRiya(
           buildPayload(
             fromData.code,
@@ -1972,10 +2038,17 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
             opts
           )
         ),
+        ttSearchPromise,
       ]);
 
-      const outResults = transformRiyaResponse(outboundData || {}, fromData.code, toData.code);
-      const inResults = transformRiyaResponse(inboundData || {}, toData.code, fromData.code);
+      const outResults = tagSupplier(
+        transformRiyaResponse(outboundData || {}, fromData.code, toData.code),
+        "riya"
+      );
+      const inResults = tagSupplier(
+        transformRiyaResponse(inboundData || {}, toData.code, fromData.code),
+        "riya"
+      );
 
       // Apply admin logic to each leg separately, then combine (flat markup per direction)
       const outWithAdmin = applyAdminLogic(outResults);
@@ -1995,7 +2068,15 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
 
         results.push(combineRoundTripFlights(o, r, oRaw, rRaw));
       }
-      const flights = sortFlights(results, sortBy, sortOrder);
+
+      const ttShaped = applyAdminLogic(ttRaw)
+        .map((f: any) => shapeTravelTerminusRoundTrip(f) ?? f)
+        .filter((f: any) => matchesOutboundTimeFilters(f) && matchesDirectOnly(f));
+
+      const merged = [...results, ...ttShaped];
+      const flights = stripInternalFlightFields(
+        sortBy ? sortFlights(merged, sortBy, sortOrder) : rankByDurationThenPrice(merged)
+      );
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
       const startIndex = (page - 1) * limit;
@@ -2008,29 +2089,53 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
       });
     } else {
       const searchDates = departureSearchDates.length > 0 ? departureSearchDates : [undefined];
-      const dataSets = await Promise.all(
-        searchDates.map((searchDate) =>
-          fetchRiya(
-            buildPayload(
-              fromData.code,
-              toData.code,
-              fromData.cityWithCode,
-              toData.cityWithCode,
-              formatRiyaDate(searchDate),
-              from?.COUNTRY || "IN",
-              to?.COUNTRY || "IN",
-              opts
+      const ttSearchPromise = isTravelTerminusConfigured()
+        ? searchTravelTerminusFlights({
+            origin: fromData.code,
+            destination: toData.code,
+            departureDate: (departureSearchDates[0] || departureDate || "") as string,
+            adults,
+            children,
+            infants,
+            cabinClass,
+            currency,
+            tripType: "one-way",
+            endUserIP: typeof req.ip === "string" ? req.ip : undefined,
+            endUserBrowserAgent: req.get("user-agent") || undefined,
+          }).catch((err) => {
+            console.error("[search-flights] TravelTerminus OW error:", err?.message || err);
+            return [] as any[];
+          })
+        : Promise.resolve([] as any[]);
+
+      const [dataSets, ttRaw] = await Promise.all([
+        Promise.all(
+          searchDates.map((searchDate) =>
+            fetchRiya(
+              buildPayload(
+                fromData.code,
+                toData.code,
+                fromData.cityWithCode,
+                toData.cityWithCode,
+                formatRiyaDate(searchDate),
+                from?.COUNTRY || "IN",
+                to?.COUNTRY || "IN",
+                opts
+              )
             )
           )
-        )
+        ),
+        ttSearchPromise,
+      ]);
+
+      const transformedData = tagSupplier(
+        dataSets.flatMap((data) => transformRiyaResponse(data || {}, fromData.code, toData.code)),
+        "riya"
       );
-      const transformedData = dataSets.flatMap((data) => transformRiyaResponse(data || {}, fromData.code, toData.code));
-      const flights = sortFlights(
-        applyAdminLogic(transformedData)
-          .filter(matchesTimeFilters)
-          .filter(matchesDirectOnly),
-        sortBy,
-        sortOrder
+      const mergedRaw = [...transformedData, ...ttRaw];
+      const merged = applyAdminLogic(mergedRaw).filter(matchesTimeFilters).filter(matchesDirectOnly);
+      const flights = stripInternalFlightFields(
+        sortBy ? sortFlights(merged, sortBy, sortOrder) : rankByDurationThenPrice(merged)
       );
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);

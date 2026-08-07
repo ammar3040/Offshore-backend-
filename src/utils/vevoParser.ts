@@ -60,7 +60,7 @@ export function parseRawClientText(rawText: string): VevoFetchInput[] {
         dateOfBirth,
         grantNumber,
         passportNumber,
-        country: countryMatch ? countryMatch[1].trim() : "AUS",
+        country: countryMatch ? countryMatch[1].trim().toUpperCase() : "GBR",
       });
     }
   }
