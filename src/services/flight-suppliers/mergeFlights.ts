@@ -23,17 +23,17 @@ function bestPrice(flight: any): number {
 function durationMinutes(flight: any): number {
   if (Number.isFinite(flight?._durationMinutes)) return Number(flight._durationMinutes);
   const legs = Array.isArray(flight?.legs) ? flight.legs : [];
+  if (legs.length > 0) {
+    const dep = new Date(legs[0]?.departureTime).getTime();
+    const arr = new Date(legs[legs.length - 1]?.arrivalTime).getTime();
+    if (Number.isFinite(dep) && Number.isFinite(arr) && arr >= dep) {
+      return Math.round((arr - dep) / 60_000);
+    }
+  }
   let total = 0;
   for (const leg of legs) {
     const match = String(leg?.duration || "").match(/(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?/i);
     if (match) total += Number(match[1] ?? 0) * 60 + Number(match[2] ?? 0);
-    else {
-      const dep = new Date(leg?.departureTime).getTime();
-      const arr = new Date(leg?.arrivalTime).getTime();
-      if (Number.isFinite(dep) && Number.isFinite(arr) && arr > dep) {
-        total += Math.round((arr - dep) / 60_000);
-      }
-    }
   }
   return total || Number.POSITIVE_INFINITY;
 }

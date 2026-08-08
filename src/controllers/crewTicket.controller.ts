@@ -43,7 +43,6 @@ import {
   searchTravelTerminusFlights,
 } from "../services/flight-suppliers/travelTerminus.service";
 import {
-  rankByDurationThenPrice,
   resolveSupplierFromFlight,
   stripInternalFlightFields,
   tagSupplier,
@@ -477,17 +476,105 @@ const COUNTRY_CODE_MAP: Record<string, string> = {
   Pakistan: "PK",
 };
 
-function parseAirportFromString(str: string): { Name: string; COUNTRY: string; COUNTRYNAME: string } {
+/** IATA → country when supplier airport labels omit ", Country" (Travel Terminus: "New Delhi [DEL]"). */
+const IATA_COUNTRY_HINTS: Record<string, { code: string; name: string }> = {
+  DEL: { code: "IN", name: "India" },
+  BOM: { code: "IN", name: "India" },
+  NMI: { code: "IN", name: "India" },
+  DXN: { code: "IN", name: "India" },
+  HDO: { code: "IN", name: "India" },
+  AMD: { code: "IN", name: "India" },
+  BLR: { code: "IN", name: "India" },
+  HYD: { code: "IN", name: "India" },
+  MAA: { code: "IN", name: "India" },
+  CCU: { code: "IN", name: "India" },
+  GOI: { code: "IN", name: "India" },
+  GOX: { code: "IN", name: "India" },
+  COK: { code: "IN", name: "India" },
+  PNQ: { code: "IN", name: "India" },
+  IXC: { code: "IN", name: "India" },
+  LKO: { code: "IN", name: "India" },
+  PAT: { code: "IN", name: "India" },
+  GAU: { code: "IN", name: "India" },
+  IXB: { code: "IN", name: "India" },
+  VTZ: { code: "IN", name: "India" },
+  TRV: { code: "IN", name: "India" },
+  IXE: { code: "IN", name: "India" },
+  JAI: { code: "IN", name: "India" },
+  IXJ: { code: "IN", name: "India" },
+  SXR: { code: "IN", name: "India" },
+  DXB: { code: "AE", name: "United Arab Emirates" },
+  AUH: { code: "AE", name: "United Arab Emirates" },
+  SHJ: { code: "AE", name: "United Arab Emirates" },
+  LHR: { code: "GB", name: "United Kingdom" },
+  LGW: { code: "GB", name: "United Kingdom" },
+  MAN: { code: "GB", name: "United Kingdom" },
+  JFK: { code: "US", name: "United States" },
+  EWR: { code: "US", name: "United States" },
+  LAX: { code: "US", name: "United States" },
+  SIN: { code: "SG", name: "Singapore" },
+  BKK: { code: "TH", name: "Thailand" },
+  KUL: { code: "MY", name: "Malaysia" },
+  DOH: { code: "QA", name: "Qatar" },
+  MCT: { code: "OM", name: "Oman" },
+  BAH: { code: "BH", name: "Bahrain" },
+  KWI: { code: "KW", name: "Kuwait" },
+  RUH: { code: "SA", name: "Saudi Arabia" },
+  JED: { code: "SA", name: "Saudi Arabia" },
+  CMB: { code: "LK", name: "Sri Lanka" },
+  DAC: { code: "BD", name: "Bangladesh" },
+  KTM: { code: "NP", name: "Nepal" },
+  KHI: { code: "PK", name: "Pakistan" },
+  ISB: { code: "PK", name: "Pakistan" },
+  LHE: { code: "PK", name: "Pakistan" },
+  CGK: { code: "ID", name: "Indonesia" },
+};
+
+function parseAirportFromString(
+  str: string,
+  iataFallback?: string
+): { Name: string; COUNTRY: string; COUNTRYNAME: string } {
   if (!str || typeof str !== "string") {
-    return { Name: "", COUNTRY: "", COUNTRYNAME: "" };
+    const hint = iataFallback ? IATA_COUNTRY_HINTS[iataFallback.toUpperCase()] : undefined;
+    if (iataFallback && hint) {
+      return {
+        Name: iataFallback.toUpperCase(),
+        COUNTRY: hint.code,
+        COUNTRYNAME: hint.name,
+      };
+    }
+    return { Name: "", COUNTRY: "XX", COUNTRYNAME: "Unknown" };
   }
-  // "Mumbai [BOM] - Chhatrapati Shivaji..., India" or "Delhi NCR [DEL] - Indira Gandhi..., India"
-  const beforeDash = str.split(" - ")[0]?.trim() || "";
-  const name = beforeDash || str;
-  const countryMatch = str.match(/,\s*([^,]+)$/);
-  const countryName = countryMatch ? countryMatch[1].trim() : "";
-  const countryCode = COUNTRY_CODE_MAP[countryName] || countryName.slice(0, 2).toUpperCase() || "XX";
-  return { Name: name, COUNTRY: countryCode, COUNTRYNAME: countryName };
+  // Riya: "Mumbai [BOM] - Chhatrapati..., India"
+  // Travel Terminus: "New Delhi [DEL]" / "Mumbai [BOM]" (no country suffix)
+  const trimmed = str.trim();
+  const beforeDash = trimmed.split(" - ")[0]?.trim() || "";
+  const name = beforeDash || trimmed;
+  const iataMatch = name.match(/\[([A-Z]{3})\]/i) || trimmed.match(/\b([A-Z]{3})\b/);
+  const iata = (iataMatch?.[1] || iataFallback || "").toUpperCase();
+
+  const countryMatch = trimmed.match(/,\s*([^,]+)$/);
+  let countryName = countryMatch ? countryMatch[1].trim() : "";
+
+  let countryCode = countryName ? COUNTRY_CODE_MAP[countryName] || "" : "";
+  if (!countryName || !countryCode) {
+    const hint = iata ? IATA_COUNTRY_HINTS[iata] : undefined;
+    if (hint) {
+      countryCode = hint.code;
+      countryName = hint.name;
+    } else if (countryName) {
+      countryCode = countryName.slice(0, 2).toUpperCase() || "XX";
+    } else {
+      countryCode = "XX";
+      countryName = "Unknown";
+    }
+  }
+
+  return {
+    Name: name || iata || "Unknown",
+    COUNTRY: countryCode || "XX",
+    COUNTRYNAME: countryName || "Unknown",
+  };
 }
 
 // Map cabin string "S - Economy" -> CabinClass
@@ -606,24 +693,42 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
 
     const fl = body.flight;
     const flightId = fl.id;
-    const firstLeg = fl.legs[0];
+    const firstLeg = fl.legs[0] as
+      | {
+          from?: string;
+          to?: string;
+          itinerary?: Array<{
+            from?: string;
+            to?: string;
+            fromAirport?: string;
+            toAirport?: string;
+          }>;
+        }
+      | undefined;
     const firstItin = firstLeg?.itinerary?.[0];
-    const from = parseAirportFromString(firstItin?.fromAirport || "");
+    const fromIata =
+      firstItin?.from ||
+      (firstLeg as { from?: string } | undefined)?.from ||
+      "";
+    const from = parseAirportFromString(firstItin?.fromAirport || "", fromIata);
 
     /** Combined outbound+return from search uses id prefix `rt-`; do not infer RT from connection segment count. */
     const isRoundTripBundle =
       typeof flightId === "string" && flightId.startsWith("rt-");
     let toAirportRaw = "";
+    let toIata = "";
     if (isRoundTripBundle && firstLeg?.itinerary?.length) {
       const outLast = firstLeg.itinerary[firstLeg.itinerary.length - 1];
       toAirportRaw = outLast?.toAirport ?? "";
+      toIata = outLast?.to ?? "";
     } else {
-      const lastLeg = fl.legs[fl.legs.length - 1];
+      const lastLeg = fl.legs[fl.legs.length - 1] as typeof firstLeg;
       const lastItins = lastLeg?.itinerary ?? [];
       const lastItin = lastItins[lastItins.length - 1];
       toAirportRaw = lastItin?.toAirport ?? firstItin?.toAirport ?? "";
+      toIata = lastItin?.to ?? firstItin?.to ?? lastLeg?.to ?? "";
     }
-    const to = parseAirportFromString(toAirportRaw);
+    const to = parseAirportFromString(toAirportRaw, toIata);
     const cabinClass = cabinToClass(fl.fares?.[0]?.cabin || "");
     const legCount = fl.legs?.length ?? 1;
     const trip = isRoundTripBundle ? TripType.RoundTrip : TripType.OneWay;
@@ -786,7 +891,16 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
     });
   } catch (error) {
     console.error("Error booking flight:", error);
-    return res.status(500).json({ message: "Internal server error." });
+    const message =
+      error instanceof Error && error.name === "ValidationError"
+        ? error.message
+        : "Internal server error.";
+    return res.status(500).json({
+      message,
+      ...(process.env.NODE_ENV !== "production" && error instanceof Error
+        ? { detail: error.message }
+        : {}),
+    });
   }
 }
 
@@ -1158,7 +1272,21 @@ function transformJourneySegments(segments: any[], totalTimeStopOver: string) {
   });
 
   const [hours, minutes] = totalTimeStopOver.split(":").map(Number);
-  const duration = minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+  let duration = Number.isFinite(hours)
+    ? minutes === 0
+      ? `${hours}h`
+      : `${hours}h ${minutes}m`
+    : "Unknown";
+
+  // Prefer door-to-door elapsed so connections show real travel time (not first-segment only).
+  const depMs = new Date(firstSegment.DepartureDateTime).getTime();
+  const arrMs = new Date(lastSegment.ArrivalDateTime).getTime();
+  if (Number.isFinite(depMs) && Number.isFinite(arrMs) && arrMs >= depMs) {
+    const totalMins = Math.round((arrMs - depMs) / 60_000);
+    const h = Math.floor(totalMins / 60);
+    const m = totalMins % 60;
+    duration = m === 0 ? `${h}h` : `${h}h ${m}m`;
+  }
 
   return {
     airlineName: firstSegment.AirlineName,
@@ -1413,6 +1541,10 @@ function dateTimeToMs(value: unknown): number | null {
 }
 
 function flightDurationMinutes(flight: any): number | null {
+  if (Number.isFinite(flight?._durationMinutes)) {
+    return Number(flight._durationMinutes);
+  }
+
   if (flight?.tripType === "round-trip" && flight.outbound?.legs && flight.inbound?.legs) {
     const outboundMinutes = flightDurationMinutes({ legs: flight.outbound.legs });
     const inboundMinutes = flightDurationMinutes({ legs: flight.inbound.legs });
@@ -1424,30 +1556,34 @@ function flightDurationMinutes(flight: any): number | null {
   const legs = Array.isArray(flight?.legs) ? flight.legs : [];
   if (legs.length === 0) return null;
 
+  // Door-to-door elapsed time (first dep → last arr). Segment labels like "1h 15m" are unreliable for connections.
+  const firstDeparture = dateTimeToMs(legs[0]?.departureTime);
+  const lastArrival = dateTimeToMs(legs[legs.length - 1]?.arrivalTime);
+  if (firstDeparture != null && lastArrival != null && lastArrival >= firstDeparture) {
+    return Math.max(0, Math.round((lastArrival - firstDeparture) / (1000 * 60)));
+  }
+
   const durationSum = legs.reduce((sum: number, leg: any) => {
     const minutes = durationToMinutes(leg?.duration);
     return minutes == null ? sum : sum + minutes;
   }, 0);
 
-  if (durationSum > 0) return durationSum;
+  return durationSum > 0 ? durationSum : null;
+}
 
-  const firstDeparture = dateTimeToMs(legs[0]?.departureTime);
-  const lastArrival = dateTimeToMs(legs[legs.length - 1]?.arrivalTime);
-  if (firstDeparture == null || lastArrival == null) return null;
-
-  return Math.max(0, Math.round((lastArrival - firstDeparture) / (1000 * 60)));
+function flightBestPrice(flight: any): number | null {
+  const fares = Array.isArray(flight?.fares) ? flight.fares : [];
+  const prices = fares
+    .map((fare: any) => Number(fare?.price ?? fare?.totalFare))
+    .filter((price: number) => Number.isFinite(price));
+  return prices.length > 0 ? Math.min(...prices) : null;
 }
 
 function flightSortValue(flight: any, sortBy: FlightSortBy): number | null {
   const legs = Array.isArray(flight?.legs) ? flight.legs : [];
   switch (sortBy) {
-    case "price": {
-      const fares = Array.isArray(flight?.fares) ? flight.fares : [];
-      const prices = fares
-        .map((fare: any) => Number(fare?.price ?? fare?.totalFare))
-        .filter((price: number) => Number.isFinite(price));
-      return prices.length > 0 ? Math.min(...prices) : null;
-    }
+    case "price":
+      return flightBestPrice(flight);
     case "duration":
       return flightDurationMinutes(flight);
     case "stops":
@@ -1474,23 +1610,44 @@ function isMarineFlight(flight: any): boolean {
   });
 }
 
+/** Default product rank: shorter duration, then lower price. */
 function sortFlights(flights: any[], sortBy?: FlightSortBy, sortOrder: FlightSortOrder = "asc") {
   const direction = sortOrder === "desc" ? -1 : 1;
+  const primary = sortBy || "duration";
+
   return flights
     .map((flight, index) => ({
       flight,
       index,
-      value: sortBy ? flightSortValue(flight, sortBy) : null,
-      isMarine: isMarineFlight(flight),
+      primary: flightSortValue(flight, primary),
+      duration: flightDurationMinutes(flight) ?? Number.POSITIVE_INFINITY,
+      price: flightBestPrice(flight) ?? Number.POSITIVE_INFINITY,
     }))
     .sort((a, b) => {
-      if (a.isMarine !== b.isMarine) return a.isMarine ? -1 : 1;
-      if (!sortBy) return a.index - b.index;
-      if (a.value == null && b.value == null) return a.index - b.index;
-      if (a.value == null) return 1;
-      if (b.value == null) return -1;
-      const diff = a.value - b.value;
-      return diff === 0 ? a.index - b.index : diff * direction;
+      if (primary === "duration") {
+        if (a.duration !== b.duration) return (a.duration - b.duration) * direction;
+        if (a.price !== b.price) return a.price - b.price;
+        return a.index - b.index;
+      }
+
+      if (primary === "price") {
+        if (a.price !== b.price) return (a.price - b.price) * direction;
+        if (a.duration !== b.duration) return a.duration - b.duration;
+        return a.index - b.index;
+      }
+
+      if (a.primary == null && b.primary == null) {
+        if (a.duration !== b.duration) return a.duration - b.duration;
+        if (a.price !== b.price) return a.price - b.price;
+        return a.index - b.index;
+      }
+      if (a.primary == null) return 1;
+      if (b.primary == null) return -1;
+      const diff = a.primary - b.primary;
+      if (diff !== 0) return diff * direction;
+      if (a.duration !== b.duration) return a.duration - b.duration;
+      if (a.price !== b.price) return a.price - b.price;
+      return a.index - b.index;
     })
     .map(({ flight }) => flight);
 }
@@ -2075,7 +2232,7 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
 
       const merged = [...results, ...ttShaped];
       const flights = stripInternalFlightFields(
-        sortBy ? sortFlights(merged, sortBy, sortOrder) : rankByDurationThenPrice(merged)
+        sortFlights(merged, sortBy || "duration", sortOrder || "asc")
       );
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
@@ -2133,9 +2290,12 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
         "riya"
       );
       const mergedRaw = [...transformedData, ...ttRaw];
+      console.log(
+        `[search-flights] OW suppliers: riya=${transformedData.length} travelterminus=${ttRaw.length}`
+      );
       const merged = applyAdminLogic(mergedRaw).filter(matchesTimeFilters).filter(matchesDirectOnly);
       const flights = stripInternalFlightFields(
-        sortBy ? sortFlights(merged, sortBy, sortOrder) : rankByDurationThenPrice(merged)
+        sortFlights(merged, sortBy || "duration", sortOrder || "asc")
       );
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
