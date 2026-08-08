@@ -274,7 +274,10 @@ function normalizeRoute(route: any, index: number, origin: string, destination: 
   };
 }
 
-/** Consume SSE until search_completed / stop_loader or timeout; return last route list. */
+/** Consume SSE until search completes, stalls after results, or timeout.
+ * Long-haul routes often keep heartbeating past hard timeout without `search_completed`;
+ * we must still return any routes already received (do not throw away inventory).
+ */
 async function consumeSearchStream(
   url: string,
   headers: Record<string, string>,
@@ -282,6 +285,13 @@ async function consumeSearchStream(
 ): Promise<{ routes: any[]; searchReqId?: string; hashReqKey?: string; currency?: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  /** After route inventory stops growing, settle instead of waiting forever on heartbeats. */
+  const IDLE_AFTER_RESULTS_MS = 12_000;
+
+  let routes: any[] = [];
+  let searchReqId: string | undefined;
+  let hashReqKey: string | undefined;
+  let currency: string | undefined;
 
   try {
     const response = await fetch(url, {
@@ -297,11 +307,9 @@ async function consumeSearchStream(
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let routes: any[] = [];
-    let searchReqId: string | undefined;
-    let hashReqKey: string | undefined;
-    let currency: string | undefined;
     let done = false;
+    let lastRouteGrowthAt = 0;
+    let lastRouteCount = 0;
 
     const handleEvent = (rawData: string) => {
       let event: any;
@@ -318,17 +326,57 @@ async function consumeSearchStream(
         searchReqId = searchResponse.searchReqId ?? searchReqId;
         hashReqKey = searchResponse.hashReqKey ?? hashReqKey;
         currency = searchResponse.meta?.currency ?? currency;
+        if (routes.length > lastRouteCount) {
+          lastRouteCount = routes.length;
+          lastRouteGrowthAt = Date.now();
+        }
       }
-      if (type === "search_completed" || type === "stop_loader" || type === "almost_complete") {
-        if (searchResponse?.route) routes = searchResponse.route;
-        done = type === "search_completed" || type === "stop_loader";
+      // Stage often finishes with almost_complete then heartbeats forever.
+      if (
+        type === "search_completed" ||
+        type === "stop_loader" ||
+        type === "almost_complete"
+      ) {
+        if (searchResponse?.route) {
+          routes = searchResponse.route;
+          lastRouteCount = routes.length;
+        }
+        done = true;
       }
     };
 
     while (!done) {
-      const { value, done: streamDone } = await reader.read();
-      if (streamDone) break;
-      buffer += decoder.decode(value, { stream: true });
+      const idleRemaining =
+        lastRouteCount > 0 ? IDLE_AFTER_RESULTS_MS - (Date.now() - lastRouteGrowthAt) : null;
+      if (idleRemaining !== null && idleRemaining <= 0) break;
+
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      type Race =
+        | { kind: "read"; value?: Uint8Array; done: boolean }
+        | { kind: "idle" };
+
+      const readPromise: Promise<Race> = reader.read().then(({ value, done: streamDone }) => ({
+        kind: "read" as const,
+        value,
+        done: streamDone,
+      }));
+
+      const racePromise: Promise<Race> =
+        idleRemaining !== null
+          ? new Promise<Race>((resolve) => {
+              idleTimer = setTimeout(() => resolve({ kind: "idle" }), idleRemaining);
+              readPromise.then(resolve).catch(() => resolve({ kind: "idle" }));
+            })
+          : readPromise;
+
+      const raced = await racePromise;
+      if (idleTimer) clearTimeout(idleTimer);
+
+      if (raced.kind === "idle") break;
+      if (raced.done) break;
+      if (!raced.value) continue;
+
+      buffer += decoder.decode(raced.value, { stream: true });
 
       let sep: number;
       while ((sep = buffer.indexOf("\n\n")) >= 0) {
@@ -349,6 +397,16 @@ async function consumeSearchStream(
     }
 
     return { routes, searchReqId, hashReqKey, currency };
+  } catch (err) {
+    // Abort/timeout after partial inventory — return what we have instead of empty merge.
+    if (routes.length > 0) {
+      console.warn(
+        `[TravelTerminus] stream ended early with ${routes.length} route(s):`,
+        err instanceof Error ? err.message : err
+      );
+      return { routes, searchReqId, hashReqKey, currency };
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -413,7 +471,7 @@ export async function searchTravelTerminusFlights(input: TravelTerminusSearchInp
       "Currency-Preference": (input.currency || "USD").toUpperCase(),
       "access-token": token,
     },
-    input.timeoutMs ?? 55_000
+    input.timeoutMs ?? 90_000
   );
 
   return routes
