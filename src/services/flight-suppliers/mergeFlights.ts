@@ -54,10 +54,11 @@ export function rankByDurationThenPrice(flights: any[]): any[] {
 export function stripInternalFlightFields(flights: any[]): any[] {
   return flights.map((flight) => {
     if (!flight || typeof flight !== "object") return flight;
-    const { _durationMinutes, fareBreakdown, supplierMeta, ...rest } = flight;
+    const { _durationMinutes, fareBreakdown, supplierMeta, ticketNumber: _tn, ...rest } = flight;
     void _durationMinutes;
     void fareBreakdown;
     void supplierMeta;
+    void _tn;
     return rest;
   });
 }

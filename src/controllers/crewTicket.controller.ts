@@ -20,6 +20,7 @@ import {
   sumMarkupByProject,
   updateAdminBalance,
   updateAdminCancellationState,
+  assignUnusedRandomTicketNumbers,
 } from "../models";
 import { CabinClass, CrewTicketStatus, TripType, type CrewTicketListOptions } from "../models/crewTicket.model";
 import { convert, fetchRates, type CurrencyCode, type ExchangeRates } from "../lib/currency";
@@ -47,6 +48,11 @@ import {
   stripInternalFlightFields,
   tagSupplier,
 } from "../services/flight-suppliers/mergeFlights";
+import {
+  buildFlightSearchCacheKey,
+  getCachedFlightSearch,
+  setCachedFlightSearch,
+} from "../services/flight-suppliers/flightSearchCache";
 import { fetchRiyaGetcity, normalizeRiyaAirports, type RiyaAirportItem } from "../lib/riya-airports";
 import { distanceKmBetween, getAirportCoordinatesByIata } from "../lib/airport-coordinates";
 import type { AuthenticatedRequest } from "../middleware/auth";
@@ -633,6 +639,7 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       flight: {
         id: string;
         supplier?: string;
+        ticketNumber?: string;
         legs: Array<{
           itinerary?: Array<{
             fromAirport?: string;
@@ -693,6 +700,8 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
 
     const fl = body.flight;
     const flightId = fl.id;
+    const preferredTicketNumber =
+      typeof fl.ticketNumber === "string" ? fl.ticketNumber.trim() : "";
     const firstLeg = fl.legs[0] as
       | {
           from?: string;
@@ -811,7 +820,8 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
     const ticketTargets =
       crewIdsArray.length > 0 ? crewIdsArray.map((crewId) => ({ crewId })) : [{ crewId: undefined }];
 
-    for (const { crewId } of ticketTargets) {
+    for (let ticketIndex = 0; ticketIndex < ticketTargets.length; ticketIndex++) {
+      const { crewId } = ticketTargets[ticketIndex]!;
       runningBalance += markupGBP;
 
       const ticket = await createCrewTicket({
@@ -827,6 +837,10 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
         infants,
         trip,
         status: CrewTicketStatus.Unapproved,
+        // Persist search-result ticket number on the first booked row when available.
+        ...(ticketIndex === 0 && preferredTicketNumber
+          ? { ticketNumber: preferredTicketNumber }
+          : {}),
         markup: markupGBP,
         balance: runningBalance,
         price: priceGBP,
@@ -1667,6 +1681,7 @@ async function fetchRiya(payload: any) {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1",
     },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(45_000),
   });
   if (!response.ok) return null;
   return response.json();
@@ -2150,94 +2165,129 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
     };
 
     if (tripType === "round-trip") {
-      const ttSearchPromise = isTravelTerminusConfigured()
-        ? searchTravelTerminusFlights({
-            origin: fromData.code,
-            destination: toData.code,
-            departureDate: departureDate || departureSearchDates[0] || "",
-            returnDate: returnDate || undefined,
-            adults,
-            children,
-            infants,
-            cabinClass,
-            currency,
-            tripType: "round-trip",
-            endUserIP: typeof req.ip === "string" ? req.ip : undefined,
-            endUserBrowserAgent: req.get("user-agent") || undefined,
-          }).catch((err) => {
-            console.error("[search-flights] TravelTerminus RT error:", err?.message || err);
-            return [] as any[];
-          })
-        : Promise.resolve([] as any[]);
+      const cacheKey = buildFlightSearchCacheKey({
+        tripType: "round-trip",
+        from: fromData.code,
+        to: toData.code,
+        departureDate: departureDate || departureSearchDates[0] || "",
+        returnDate: returnDate || "",
+        adults,
+        children,
+        infants,
+        cabinClass,
+        currency,
+        sector,
+        directOnly: Boolean(directOnly),
+        sortBy: sortBy || "duration",
+        sortOrder: sortOrder || "asc",
+        filterDepartureTime,
+        departureTimeMode,
+        filterArrivalDate,
+        filterArrivalTime,
+        arrivalTimeMode,
+        filterReturnTime,
+        returnTimeMode,
+      });
 
-      const [outboundData, inboundData, ttRaw] = await Promise.all([
-        fetchRiya(
-          buildPayload(
-            fromData.code,
-            toData.code,
-            fromData.cityWithCode,
-            toData.cityWithCode,
-            formattedDepDate,
-            from?.COUNTRY || "IN",
-            to?.COUNTRY || "IN",
-            opts
-          )
-        ),
-        fetchRiya(
-          buildPayload(
-            toData.code,
-            fromData.code,
-            toData.cityWithCode,
-            fromData.cityWithCode,
-            formattedReturnDate,
-            to?.COUNTRY || "IN",
-            from?.COUNTRY || "IN",
-            opts
-          )
-        ),
-        ttSearchPromise,
-      ]);
+      let flights = getCachedFlightSearch(cacheKey);
+      if (!flights) {
+        const ttSearchPromise = isTravelTerminusConfigured()
+          ? searchTravelTerminusFlights({
+              origin: fromData.code,
+              destination: toData.code,
+              departureDate: departureDate || departureSearchDates[0] || "",
+              returnDate: returnDate || undefined,
+              adults,
+              children,
+              infants,
+              cabinClass,
+              currency,
+              tripType: "round-trip",
+              timeoutMs: 28_000,
+              endUserIP: typeof req.ip === "string" ? req.ip : undefined,
+              endUserBrowserAgent: req.get("user-agent") || undefined,
+            }).catch((err) => {
+              console.error("[search-flights] TravelTerminus RT error:", err?.message || err);
+              return [] as any[];
+            })
+          : Promise.resolve([] as any[]);
 
-      const outResults = tagSupplier(
-        transformRiyaResponse(outboundData || {}, fromData.code, toData.code),
-        "riya"
-      );
-      const inResults = tagSupplier(
-        transformRiyaResponse(inboundData || {}, toData.code, fromData.code),
-        "riya"
-      );
+        const [outboundData, inboundData, ttRaw] = await Promise.all([
+          fetchRiya(
+            buildPayload(
+              fromData.code,
+              toData.code,
+              fromData.cityWithCode,
+              toData.cityWithCode,
+              formattedDepDate,
+              from?.COUNTRY || "IN",
+              to?.COUNTRY || "IN",
+              opts
+            )
+          ),
+          fetchRiya(
+            buildPayload(
+              toData.code,
+              fromData.code,
+              toData.cityWithCode,
+              fromData.cityWithCode,
+              formattedReturnDate,
+              to?.COUNTRY || "IN",
+              from?.COUNTRY || "IN",
+              opts
+            )
+          ),
+          ttSearchPromise,
+        ]);
 
-      // Apply admin logic to each leg separately, then combine (flat markup per direction)
-      const outWithAdmin = applyAdminLogic(outResults);
-      const inWithAdmin = applyAdminLogic(inResults);
+        const outResults = tagSupplier(
+          transformRiyaResponse(outboundData || {}, fromData.code, toData.code),
+          "riya"
+        );
+        const inResults = tagSupplier(
+          transformRiyaResponse(inboundData || {}, toData.code, fromData.code),
+          "riya"
+        );
 
-      const results: any[] = [];
-      const minLen = Math.min(outWithAdmin.length, inWithAdmin.length);
-      for (let i = 0; i < minLen; i++) {
-        const o = outWithAdmin[i];
-        const r = inWithAdmin[i];
-        const oRaw = outResults[i];
-        const rRaw = inResults[i];
-        if (!o || !r || !oRaw || !rRaw) continue;
-        if (!matchesOutboundTimeFilters(o)) continue;
-        if (!matchesReturnTimeFilters(r)) continue;
-        if (!matchesDirectOnly(o) || !matchesDirectOnly(r)) continue;
+        // Apply admin logic to each leg separately, then combine (flat markup per direction)
+        const outWithAdmin = applyAdminLogic(outResults);
+        const inWithAdmin = applyAdminLogic(inResults);
 
-        results.push(combineRoundTripFlights(o, r, oRaw, rRaw));
+        const results: any[] = [];
+        const minLen = Math.min(outWithAdmin.length, inWithAdmin.length);
+        for (let i = 0; i < minLen; i++) {
+          const o = outWithAdmin[i];
+          const r = inWithAdmin[i];
+          const oRaw = outResults[i];
+          const rRaw = inResults[i];
+          if (!o || !r || !oRaw || !rRaw) continue;
+          if (!matchesOutboundTimeFilters(o)) continue;
+          if (!matchesReturnTimeFilters(r)) continue;
+          if (!matchesDirectOnly(o) || !matchesDirectOnly(r)) continue;
+
+          results.push(combineRoundTripFlights(o, r, oRaw, rRaw));
+        }
+
+        const ttShaped = applyAdminLogic(ttRaw)
+          .map((f: any) => shapeTravelTerminusRoundTrip(f) ?? f)
+          .filter((f: any) => matchesOutboundTimeFilters(f) && matchesDirectOnly(f));
+
+        const merged = [...results, ...ttShaped];
+        flights = stripInternalFlightFields(
+          sortFlights(merged, sortBy || "duration", sortOrder || "asc")
+        );
+        setCachedFlightSearch(cacheKey, flights);
+        console.log(
+          `[search-flights] RT suppliers: riyaPairs=${results.length} travelterminus=${ttRaw.length} total=${flights.length}`
+        );
       }
 
-      const ttShaped = applyAdminLogic(ttRaw)
-        .map((f: any) => shapeTravelTerminusRoundTrip(f) ?? f)
-        .filter((f: any) => matchesOutboundTimeFilters(f) && matchesDirectOnly(f));
-
-      const merged = [...results, ...ttShaped];
-      const flights = stripInternalFlightFields(
-        sortFlights(merged, sortBy || "duration", sortOrder || "asc")
-      );
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
       const startIndex = (page - 1) * limit;
-      const paginatedFlights = flights.slice(startIndex, startIndex + limit);
+      const paginatedFlights = await assignUnusedRandomTicketNumbers(
+        flights.slice(startIndex, startIndex + limit)
+      );
       return res.json({
         project_id,
         crew_ids: crewIdsArray,
@@ -2246,61 +2296,91 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
       });
     } else {
       const searchDates = departureSearchDates.length > 0 ? departureSearchDates : [undefined];
-      const ttSearchPromise = isTravelTerminusConfigured()
-        ? searchTravelTerminusFlights({
-            origin: fromData.code,
-            destination: toData.code,
-            departureDate: (departureSearchDates[0] || departureDate || "") as string,
-            adults,
-            children,
-            infants,
-            cabinClass,
-            currency,
-            tripType: "one-way",
-            endUserIP: typeof req.ip === "string" ? req.ip : undefined,
-            endUserBrowserAgent: req.get("user-agent") || undefined,
-          }).catch((err) => {
-            console.error("[search-flights] TravelTerminus OW error:", err?.message || err);
-            return [] as any[];
-          })
-        : Promise.resolve([] as any[]);
+      const cacheKey = buildFlightSearchCacheKey({
+        tripType: "one-way",
+        from: fromData.code,
+        to: toData.code,
+        departureDate: (departureSearchDates[0] || departureDate || "") as string,
+        adults,
+        children,
+        infants,
+        cabinClass,
+        currency,
+        sector,
+        directOnly: Boolean(directOnly),
+        sortBy: sortBy || "duration",
+        sortOrder: sortOrder || "asc",
+        filterDepartureTime,
+        departureTimeMode,
+        filterArrivalDate,
+        filterArrivalTime,
+        arrivalTimeMode,
+        searchDates,
+      });
 
-      const [dataSets, ttRaw] = await Promise.all([
-        Promise.all(
-          searchDates.map((searchDate) =>
-            fetchRiya(
-              buildPayload(
-                fromData.code,
-                toData.code,
-                fromData.cityWithCode,
-                toData.cityWithCode,
-                formatRiyaDate(searchDate),
-                from?.COUNTRY || "IN",
-                to?.COUNTRY || "IN",
-                opts
+      let flights = getCachedFlightSearch(cacheKey);
+      if (!flights) {
+        const ttSearchPromise = isTravelTerminusConfigured()
+          ? searchTravelTerminusFlights({
+              origin: fromData.code,
+              destination: toData.code,
+              departureDate: (departureSearchDates[0] || departureDate || "") as string,
+              adults,
+              children,
+              infants,
+              cabinClass,
+              currency,
+              tripType: "one-way",
+              timeoutMs: 28_000,
+              endUserIP: typeof req.ip === "string" ? req.ip : undefined,
+              endUserBrowserAgent: req.get("user-agent") || undefined,
+            }).catch((err) => {
+              console.error("[search-flights] TravelTerminus OW error:", err?.message || err);
+              return [] as any[];
+            })
+          : Promise.resolve([] as any[]);
+
+        const [dataSets, ttRaw] = await Promise.all([
+          Promise.all(
+            searchDates.map((searchDate) =>
+              fetchRiya(
+                buildPayload(
+                  fromData.code,
+                  toData.code,
+                  fromData.cityWithCode,
+                  toData.cityWithCode,
+                  formatRiyaDate(searchDate),
+                  from?.COUNTRY || "IN",
+                  to?.COUNTRY || "IN",
+                  opts
+                )
               )
             )
-          )
-        ),
-        ttSearchPromise,
-      ]);
+          ),
+          ttSearchPromise,
+        ]);
 
-      const transformedData = tagSupplier(
-        dataSets.flatMap((data) => transformRiyaResponse(data || {}, fromData.code, toData.code)),
-        "riya"
-      );
-      const mergedRaw = [...transformedData, ...ttRaw];
-      console.log(
-        `[search-flights] OW suppliers: riya=${transformedData.length} travelterminus=${ttRaw.length}`
-      );
-      const merged = applyAdminLogic(mergedRaw).filter(matchesTimeFilters).filter(matchesDirectOnly);
-      const flights = stripInternalFlightFields(
-        sortFlights(merged, sortBy || "duration", sortOrder || "asc")
-      );
+        const transformedData = tagSupplier(
+          dataSets.flatMap((data) => transformRiyaResponse(data || {}, fromData.code, toData.code)),
+          "riya"
+        );
+        const mergedRaw = [...transformedData, ...ttRaw];
+        console.log(
+          `[search-flights] OW suppliers: riya=${transformedData.length} travelterminus=${ttRaw.length}`
+        );
+        const merged = applyAdminLogic(mergedRaw).filter(matchesTimeFilters).filter(matchesDirectOnly);
+        flights = stripInternalFlightFields(
+          sortFlights(merged, sortBy || "duration", sortOrder || "asc")
+        );
+        setCachedFlightSearch(cacheKey, flights);
+      }
+
       const total = flights.length;
       const totalPages = Math.ceil(total / limit);
       const startIndex = (page - 1) * limit;
-      const paginatedFlights = flights.slice(startIndex, startIndex + limit);
+      const paginatedFlights = await assignUnusedRandomTicketNumbers(
+        flights.slice(startIndex, startIndex + limit)
+      );
       return res.json({
         project_id,
         crew_ids: crewIdsArray,

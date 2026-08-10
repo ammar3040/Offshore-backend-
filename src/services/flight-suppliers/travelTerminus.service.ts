@@ -286,7 +286,7 @@ async function consumeSearchStream(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   /** After route inventory stops growing, settle instead of waiting forever on heartbeats. */
-  const IDLE_AFTER_RESULTS_MS = 12_000;
+  const IDLE_AFTER_RESULTS_MS = 5_000;
 
   let routes: any[] = [];
   let searchReqId: string | undefined;
@@ -471,7 +471,7 @@ export async function searchTravelTerminusFlights(input: TravelTerminusSearchInp
       "Currency-Preference": (input.currency || "USD").toUpperCase(),
       "access-token": token,
     },
-    input.timeoutMs ?? 90_000
+    input.timeoutMs ?? 28_000
   );
 
   return routes
