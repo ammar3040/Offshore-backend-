@@ -18,9 +18,16 @@ export enum TripType {
 
 export enum CrewTicketStatus {
   Unapproved = "UNAPPROVED",
+  /** Non-marine / TT / optimized bookings awaiting superadmin quoted price. */
+  Requested = "REQUESTED",
+  /** Superadmin set a quoted price; admin can confirm into pending approval. */
+  Quoted = "QUOTED",
   Approved = "APPROVED",
   Cancelled = "CANCELLED",
 }
+
+/** Inventory ribbon / request-flow classification. */
+export type TicketInventoryKind = "marine" | "published" | "general" | "optimized";
 
 export interface StoredFlightItinerarySegment {
   airlineName?: string;
@@ -45,6 +52,8 @@ export interface StoredFlightLeg {
   duration?: string;
   airlineName?: string;
   airlineCode?: string;
+  /** Per-leg supplier for optimized / mixed tickets. */
+  supplier?: "riya" | "travelterminus";
   itinerary?: StoredFlightItinerarySegment[];
 }
 
@@ -63,7 +72,8 @@ export interface CrewTicketFlightSnapshot {
   /** Display currency for fare in emails (e.g. INR from search). */
   currency?: string;
   /** Which inventory supplied this itinerary. */
-  supplier?: "riya" | "travelterminus";
+  supplier?: "riya" | "travelterminus" | "mixed";
+  isMarineFare?: boolean;
 }
 
 export interface CrewTicket {
@@ -114,8 +124,20 @@ export interface CrewTicket {
   travelDirection?: "HOME_TO_RIG" | "RIG_TO_HOME";
   /** Search/book flight payload for ticket emails */
   flightSnapshot?: CrewTicketFlightSnapshot;
-  /** Inventory source: Riya Marine or Travel Terminus */
-  supplier?: "riya" | "travelterminus";
+  /** Inventory source: Riya Marine, Travel Terminus, or mixed optimized stitch */
+  supplier?: "riya" | "travelterminus" | "mixed";
+  /** True when the booked fare is a Riya Marine fare (direct pending-approval path). */
+  isMarineFare?: boolean;
+  /** Ribbon / request-flow kind derived at book time. */
+  inventoryKind?: TicketInventoryKind;
+  /** True for published / general / optimized — use request → quote → pending flow. */
+  requestFlow?: boolean;
+  /** Superadmin-quoted price in GBP (shown to admin on Quoted tickets). */
+  quotedPrice?: number;
+  quotedAt?: Date;
+  quotedBy?: mongoose.Types.ObjectId;
+  /** When admin acknowledged the one-time “approved” toast for a request-flow ticket. */
+  adminApprovalSeenAt?: Date;
 }
 
 export interface CrewTicketDocument extends Omit<CrewTicket, "id">, Document {
@@ -158,6 +180,7 @@ const flightLegSchema = new Schema<StoredFlightLeg>(
     duration: { type: String, required: false },
     airlineName: { type: String, required: false },
     airlineCode: { type: String, required: false },
+    supplier: { type: String, enum: ["riya", "travelterminus"], required: false },
     itinerary: { type: [flightItinerarySegmentSchema], default: [] },
   },
   { _id: false }
@@ -179,7 +202,8 @@ const flightSnapshotSchema = new Schema<CrewTicketFlightSnapshot>(
     legs: { type: [flightLegSchema], default: [] },
     fares: { type: [flightFareSchema], default: [] },
     currency: { type: String, required: false },
-    supplier: { type: String, enum: ["riya", "travelterminus"], required: false },
+    supplier: { type: String, enum: ["riya", "travelterminus", "mixed"], required: false },
+    isMarineFare: { type: Boolean, required: false },
   },
   { _id: false }
 );
@@ -230,7 +254,18 @@ const crewTicketSchema = new Schema<CrewTicketDocument>(
       required: false,
     },
     flightSnapshot: { type: flightSnapshotSchema, required: false },
-    supplier: { type: String, enum: ["riya", "travelterminus"], required: false, default: "riya" },
+    supplier: { type: String, enum: ["riya", "travelterminus", "mixed"], required: false, default: "riya" },
+    isMarineFare: { type: Boolean, required: false, default: false },
+    inventoryKind: {
+      type: String,
+      enum: ["marine", "published", "general", "optimized"],
+      required: false,
+    },
+    requestFlow: { type: Boolean, required: false, default: false },
+    quotedPrice: { type: Number, required: false },
+    quotedAt: { type: Date, required: false },
+    quotedBy: { type: Schema.Types.ObjectId, ref: "SuperAdmin", required: false },
+    adminApprovalSeenAt: { type: Date, required: false },
   },
   { timestamps: true }
 );
@@ -334,7 +369,27 @@ function toCrewTicket(doc: CrewTicketDocument): CrewTicket {
     travelEnd: doc.travelEnd,
     travelDirection: doc.travelDirection,
     flightSnapshot: doc.flightSnapshot,
-    supplier: doc.supplier === "travelterminus" ? "travelterminus" : doc.supplier === "riya" ? "riya" : undefined,
+    supplier:
+      doc.supplier === "travelterminus"
+        ? "travelterminus"
+        : doc.supplier === "mixed"
+          ? "mixed"
+          : doc.supplier === "riya"
+            ? "riya"
+            : undefined,
+    isMarineFare: Boolean(doc.isMarineFare),
+    inventoryKind:
+      doc.inventoryKind === "marine" ||
+      doc.inventoryKind === "published" ||
+      doc.inventoryKind === "general" ||
+      doc.inventoryKind === "optimized"
+        ? doc.inventoryKind
+        : undefined,
+    requestFlow: Boolean(doc.requestFlow),
+    quotedPrice: doc.quotedPrice,
+    quotedAt: doc.quotedAt,
+    quotedBy: doc.quotedBy,
+    adminApprovalSeenAt: doc.adminApprovalSeenAt,
   };
 }
 

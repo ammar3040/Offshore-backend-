@@ -1,15 +1,19 @@
 import { Router } from "express";
 import {
   approveCrewTicket,
+  ackCrewTicketApprovalNotification,
   bookFlight,
+  confirmQuotedCrewTicket,
   deleteCrewTicketHandler,
   downloadCrewTicketPdf,
   getCrewTicketById,
   getCrewTickets,
   getCrewTicketReportSpends,
   getCrewTicketsByCrewId,
+  optimizeFlightsController,
   patchCrewTicket,
   postCrewTicket,
+  quoteCrewTicketPrice,
   searchAirports,
   searchFlights,
   searchFlightsController,
@@ -23,10 +27,13 @@ import { uploadCrewTicketPdfToCloudinary } from "../middleware/cloudinaryUpload"
 import {
   approveCrewTicketSchema,
   bookFlightSchema,
+  confirmQuotedCrewTicketSchema,
   createCrewTicketSchema,
   crewIdParamSchema,
   crewTicketIdParamSchema,
   listCrewTicketsQuerySchema,
+  optimizeFlightsSchema,
+  quoteCrewTicketPriceSchema,
   reportSpendsQuerySchema,
   searchFlightsSchema,
   updateCrewTicketSchema,
@@ -47,6 +54,7 @@ router.get("/:id/pdf", authenticateAdminOrCrew, validate(crewTicketIdParamSchema
 router.get("/:id", authenticateAdminOrCrew, validate(crewTicketIdParamSchema, "params"), getCrewTicketById);
 router.post("/", authenticateAdmin, validate(createCrewTicketSchema), postCrewTicket);
 router.post("/search-flights", authenticateAdmin, validate(searchFlightsSchema), searchFlightsController);
+router.post("/optimize-flights", authenticateAdmin, validate(optimizeFlightsSchema), optimizeFlightsController);
 router.post("/book", authenticateAdmin, validate(bookFlightSchema), bookFlight);
 router.patch(
   "/:id/approve",
@@ -54,6 +62,26 @@ router.patch(
   validate(crewTicketIdParamSchema, "params"),
   validate(approveCrewTicketSchema),
   approveCrewTicket
+);
+router.patch(
+  "/:id/quote-price",
+  authenticateSuperAdmin,
+  validate(crewTicketIdParamSchema, "params"),
+  validate(quoteCrewTicketPriceSchema),
+  quoteCrewTicketPrice
+);
+router.post(
+  "/:id/confirm-quote",
+  authenticateAdmin,
+  validate(crewTicketIdParamSchema, "params"),
+  validate(confirmQuotedCrewTicketSchema),
+  confirmQuotedCrewTicket
+);
+router.post(
+  "/:id/ack-approval-notification",
+  authenticateAdmin,
+  validate(crewTicketIdParamSchema, "params"),
+  ackCrewTicketApprovalNotification
 );
 router.post(
   "/:id/send-ticket-email",

@@ -80,16 +80,28 @@ export async function connectDB(): Promise<void> {
     await ensureCrewTicketIndexes();
     await ensureAdminInvoiceIndexes();
   } catch (error: any) {
-    // If MongoDB Atlas DNS lookup or TXT query times out/fails, retry using DoH or custom DNS fallback.
-    if (
+    const msg = String(error?.message || "");
+    const code = String(error?.code || "");
+    const isDnsOrSrvFailure =
       uri.startsWith("mongodb+srv://") &&
-      (error.code === "ETIMEOUT" || 
-       error.message?.includes("ENOTFOUND") || 
-       error.message?.includes("ETIMEOUT") ||
-       error.message?.includes("queryTxt"))
-    ) {
+      (code === "ETIMEOUT" ||
+        code === "ENOTFOUND" ||
+        code === "EREFUSED" ||
+        code === "ESERVFAIL" ||
+        code === "querySrv" ||
+        msg.includes("ENOTFOUND") ||
+        msg.includes("ETIMEOUT") ||
+        msg.includes("EREFUSED") ||
+        msg.includes("queryTxt") ||
+        msg.includes("querySrv") ||
+        msg.includes("ESERVFAIL"));
+
+    // If MongoDB Atlas DNS lookup or TXT query times out/fails, retry using DoH or custom DNS fallback.
+    if (isDnsOrSrvFailure) {
       // eslint-disable-next-line no-console
-      console.warn("MongoDB connection timed out or DNS resolution failed. Attempting dynamic resolution using DNS-over-HTTPS...");
+      console.warn(
+        "MongoDB connection timed out or DNS resolution failed. Attempting dynamic resolution using DNS-over-HTTPS..."
+      );
       try {
         const resolvedUri = await resolveSrvToStandardUri(uri);
         await mongoose.connect(resolvedUri);

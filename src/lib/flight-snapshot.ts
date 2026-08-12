@@ -6,6 +6,7 @@ type BookFlightPayload = {
   airlineCode?: string;
   originalCurrency?: string;
   supplier?: "riya" | "travelterminus" | string;
+  isMarineFare?: boolean;
   legs?: unknown[];
   fares?: Array<{
     totalFare?: number;
@@ -59,6 +60,9 @@ export function buildFlightSnapshotFromBookPayload(
       duration: leg.duration as string | undefined,
       airlineName: leg.airlineName as string | undefined,
       airlineCode: leg.airlineCode as string | undefined,
+      ...(leg.supplier === "travelterminus" || leg.supplier === "riya"
+        ? { supplier: leg.supplier as "riya" | "travelterminus" }
+        : {}),
       itinerary,
     };
   });
@@ -77,9 +81,12 @@ export function buildFlightSnapshotFromBookPayload(
       },
     ],
     currency: currency || flight.originalCurrency || "GBP",
-    ...(flight.supplier === "travelterminus" || flight.supplier === "riya"
+    ...(flight.supplier === "travelterminus" ||
+    flight.supplier === "riya" ||
+    flight.supplier === "mixed"
       ? { supplier: flight.supplier }
       : {}),
+    ...(typeof flight.isMarineFare === "boolean" ? { isMarineFare: flight.isMarineFare } : {}),
   };
 }
 

@@ -6,7 +6,7 @@
  * Docs: https://supplier-api.travelterminus.com
  */
 
-export type FlightSupplierId = "riya" | "travelterminus";
+export type FlightSupplierId = "riya" | "travelterminus" | "mixed";
 
 export interface TravelTerminusSearchInput {
   origin: string;

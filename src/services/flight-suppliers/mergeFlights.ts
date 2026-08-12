@@ -66,12 +66,25 @@ export function stripInternalFlightFields(flights: any[]): any[] {
 export function resolveSupplierFromFlight(flight: {
   id?: string;
   supplier?: string;
+  optimized?: boolean;
+  legs?: Array<Record<string, unknown> | { supplier?: string }>;
 }): FlightSupplierId {
   const raw = String(flight?.supplier || "").toLowerCase();
+  if (raw === "mixed") return "mixed";
   if (raw === "travelterminus" || raw === "travel_terminus" || raw === "tt") {
     return "travelterminus";
   }
   if (raw === "riya" || raw === "riya_marine" || raw === "riya-marine") return "riya";
+  if (flight?.optimized) {
+    const legSuppliers = new Set(
+      (flight.legs ?? [])
+        .map((l) => String((l as { supplier?: string })?.supplier || "").toLowerCase())
+        .filter(Boolean)
+    );
+    if (legSuppliers.has("travelterminus") && legSuppliers.has("riya")) return "mixed";
+    if (legSuppliers.has("travelterminus")) return "travelterminus";
+  }
   if (typeof flight?.id === "string" && flight.id.startsWith("tt-")) return "travelterminus";
+  if (typeof flight?.id === "string" && flight.id.startsWith("opt-")) return "mixed";
   return "riya";
 }

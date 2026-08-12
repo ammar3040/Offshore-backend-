@@ -67,6 +67,15 @@ export const approveCrewTicketSchema = Joi.object({
   }),
 });
 
+/** Superadmin sets quoted GBP price on REQUESTED tickets. */
+export const quoteCrewTicketPriceSchema = Joi.object({
+  price: Joi.number().min(0).required().messages({
+    "any.required": "price is required",
+  }),
+});
+
+export const confirmQuotedCrewTicketSchema = Joi.object({}).unknown(false);
+
 export const crewTicketIdParamSchema = Joi.object({
   id: objectId.required().messages({
     "any.required": "Crew ticket id is required",
@@ -124,6 +133,15 @@ export const searchFlightsSchema = Joi.object({
   }),
   /** When returnTime is set: after = return flights departing at or after that time (default); before = at or before. */
   returnTimeMode: timeFilterMode.optional().default("after"),
+  project_id: objectId.optional(),
+  crew_ids: Joi.array().items(objectId).optional().default([]),
+}).unknown(true);
+
+/** For POST /optimize-flights — stitch Riya + Travel Terminus segments. */
+export const optimizeFlightsSchema = Joi.object({
+  minConnectionHours: Joi.number().min(1).max(24).default(3),
+  maxHops: Joi.number().integer().valid(2, 3).default(2),
+  limit: Joi.number().integer().min(1).max(20).default(8),
   project_id: objectId.optional(),
   crew_ids: Joi.array().items(objectId).optional().default([]),
 }).unknown(true);

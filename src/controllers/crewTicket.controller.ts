@@ -53,6 +53,16 @@ import {
   getCachedFlightSearch,
   setCachedFlightSearch,
 } from "../services/flight-suppliers/flightSearchCache";
+import {
+  computeBaseline,
+  filterByDurationCap,
+  hubCountryCode,
+  OPTIMIZE_DEFAULTS,
+  selectOptimizeHubs,
+  shortlistOptimized,
+  stitchThreeHop,
+  stitchTwoHop,
+} from "../services/flight-suppliers/optimizeFlights";
 import { fetchRiyaGetcity, normalizeRiyaAirports, type RiyaAirportItem } from "../lib/riya-airports";
 import { distanceKmBetween, getAirportCoordinatesByIata } from "../lib/airport-coordinates";
 import type { AuthenticatedRequest } from "../middleware/auth";
@@ -810,9 +820,10 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
 
     const created: import("../models/crewTicket.model").CrewTicket[] = [];
     let runningBalance = body.project_id ? await sumMarkupByProject(body.project_id) : 0;
-    const supplier = resolveSupplierFromFlight(fl);
+    const inventory = resolveTicketInventory(fl as any);
+    const supplier = inventory.supplier;
     const flightSnapshot = buildFlightSnapshotFromBookPayload(
-      { ...fl, supplier },
+      { ...fl, supplier, isMarineFare: inventory.isMarineFare },
       requestCurrency,
       payloadPriceRaw
     );
@@ -836,7 +847,7 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
         children,
         infants,
         trip,
-        status: CrewTicketStatus.Unapproved,
+        status: inventory.initialStatus,
         // Persist search-result ticket number on the first booked row when available.
         ...(ticketIndex === 0 && preferredTicketNumber
           ? { ticketNumber: preferredTicketNumber }
@@ -846,6 +857,9 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
         price: priceGBP,
         cashback: cashbackGBP,
         supplier,
+        isMarineFare: inventory.isMarineFare,
+        inventoryKind: inventory.inventoryKind,
+        requestFlow: inventory.requestFlow,
         ...(travelBounds
           ? { travelStart: travelBounds.travelStart, travelEnd: travelBounds.travelEnd }
           : {}),
@@ -875,33 +889,41 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       await updateAdminCancellationState(adminId, newOutstanding, newSlots);
     }
 
-    await Promise.all(
-      created.map(async (ticket) => {
-        const crewId = ticket.crew_id ? refId(ticket.crew_id) : null;
-        const crew = crewId ? await findCrewByCrewId(crewId) : null;
-        const { flight: flightData } = buildFlightTicketDataFromCrewTicket(ticket);
-        await sendTicketApprovalRequestEmail({
-          ticketId: ticket.id,
-          crewName: crewDisplayName(crew ?? ticket.crew_id),
-          crewEmail: crew?.email,
-          crewPhone: crew?.phone,
-          projectTitle: projectDisplayTitle(ticket.project_id) || project?.title || "Unassigned",
-          vesselName: vesselDisplayName(ticket),
-          flight: flightData,
-          passportNumber: crew?.passport?.passport_number,
-          passportDocumentUrl: crew?.passport?.passport_document,
-        });
-      })
-    );
+    // Only marine (direct pending-approval) tickets notify superadmin for immediate approval.
+    if (!inventory.requestFlow) {
+      await Promise.all(
+        created.map(async (ticket) => {
+          const crewId = ticket.crew_id ? refId(ticket.crew_id) : null;
+          const crew = crewId ? await findCrewByCrewId(crewId) : null;
+          const { flight: flightData } = buildFlightTicketDataFromCrewTicket(ticket);
+          await sendTicketApprovalRequestEmail({
+            ticketId: ticket.id,
+            crewName: crewDisplayName(crew ?? ticket.crew_id),
+            crewEmail: crew?.email,
+            crewPhone: crew?.phone,
+            projectTitle: projectDisplayTitle(ticket.project_id) || project?.title || "Unassigned",
+            vesselName: vesselDisplayName(ticket),
+            flight: flightData,
+            passportNumber: crew?.passport?.passport_number,
+            passportDocumentUrl: crew?.passport?.passport_document,
+          });
+        })
+      );
+    }
 
     const crewLabel =
       crewIdsArray.length > 0
         ? ` for ${created.length} crew member${created.length === 1 ? "" : "s"}`
         : "";
+    const statusMessage = inventory.requestFlow
+      ? `submitted as a request${crewLabel}. Superadmin will set the final price.`
+      : `created successfully${crewLabel} and sent for approval.`;
     return res.status(201).json({
-      message: `Crew ticket(s) created successfully${crewLabel} and sent for approval.`,
+      message: `Crew ticket(s) ${statusMessage}`,
       crewTickets: created.map(withTicketPdfAccess),
       flightId,
+      requestFlow: inventory.requestFlow,
+      inventoryKind: inventory.inventoryKind,
     });
   } catch (error) {
     console.error("Error booking flight:", error);
@@ -941,6 +963,15 @@ export async function approveCrewTicket(
     }
     if (ticket.status === CrewTicketStatus.Approved) {
       return res.status(409).json({ message: "Crew ticket is already approved." });
+    }
+    if (ticket.status === CrewTicketStatus.Requested || ticket.status === CrewTicketStatus.Quoted) {
+      return res.status(409).json({
+        message:
+          "This ticket is still in the request flow. Set a quoted price and wait for admin confirmation before final approval.",
+      });
+    }
+    if (ticket.status !== CrewTicketStatus.Unapproved) {
+      return res.status(409).json({ message: "Only pending-approval tickets can be approved." });
     }
 
     const crewId = refId(ticket.crew_id);
@@ -992,6 +1023,154 @@ export async function approveCrewTicket(
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error approving crew ticket:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+/** Superadmin sets the final/quoted price on a REQUESTED ticket. */
+export async function quoteCrewTicketPrice(
+  req: AuthenticatedRequest & Request<{ id: string }>,
+  res: Response
+) {
+  try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+    if (!isSuperAdmin(role)) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+
+    const { id } = req.params;
+    const { price } = req.body as { price: number };
+    const priceGBP = Math.round(Number(price) * 100) / 100;
+    if (!Number.isFinite(priceGBP) || priceGBP < 0) {
+      return res.status(400).json({ message: "price must be a non-negative number (GBP)." });
+    }
+
+    const ticket = await findCrewTicketById(id);
+    if (!ticket) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+    if (ticket.status !== CrewTicketStatus.Requested && ticket.status !== CrewTicketStatus.Quoted) {
+      return res.status(409).json({
+        message: "Only requested tickets can receive a quoted price.",
+      });
+    }
+
+    const updated = await updateCrewTicket(id, {
+      status: CrewTicketStatus.Quoted,
+      price: priceGBP,
+      quotedPrice: priceGBP,
+      quotedAt: new Date(),
+      quotedBy: new mongoose.Types.ObjectId(actorUserId),
+    });
+    if (!updated) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+
+    return res.status(200).json({
+      message: "Quoted price saved. Admin can now confirm into pending approval.",
+      crewTicket: withTicketPdfAccess(updated),
+    });
+  } catch (error) {
+    console.error("Error quoting crew ticket price:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+/** Admin confirms a quoted request → moves to pending approval (UNAPPROVED). */
+export async function confirmQuotedCrewTicket(
+  req: AuthenticatedRequest & Request<{ id: string }>,
+  res: Response
+) {
+  try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const { id } = req.params;
+    const ticket = await findCrewTicketById(id);
+    if (!ticket) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+    if (!(await ticketAccessibleByCaller(id, actorUserId, role))) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+    if (ticket.status !== CrewTicketStatus.Quoted) {
+      return res.status(409).json({
+        message: "Only quoted request tickets can be confirmed for approval.",
+      });
+    }
+
+    const updated = await updateCrewTicket(id, {
+      status: CrewTicketStatus.Unapproved,
+    });
+    if (!updated) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+
+    const crewId = ticket.crew_id ? refId(ticket.crew_id) : null;
+    const crew = crewId ? await findCrewByCrewId(crewId) : null;
+    const { flight: flightData } = buildFlightTicketDataFromCrewTicket(updated);
+    await sendTicketApprovalRequestEmail({
+      ticketId: updated.id,
+      crewName: crewDisplayName(crew ?? updated.crew_id),
+      crewEmail: crew?.email,
+      crewPhone: crew?.phone,
+      projectTitle: projectDisplayTitle(updated.project_id) || "Unassigned",
+      vesselName: vesselDisplayName(updated),
+      flight: flightData,
+      passportNumber: crew?.passport?.passport_number,
+      passportDocumentUrl: crew?.passport?.passport_document,
+    });
+
+    return res.status(200).json({
+      message: "Ticket confirmed and sent for pending approval.",
+      crewTicket: withTicketPdfAccess(updated),
+    });
+  } catch (error) {
+    console.error("Error confirming quoted crew ticket:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+/** Admin acknowledges one-time approval toast for a request-flow ticket. */
+export async function ackCrewTicketApprovalNotification(
+  req: AuthenticatedRequest & Request<{ id: string }>,
+  res: Response
+) {
+  try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const { id } = req.params;
+    const ticket = await findCrewTicketById(id);
+    if (!ticket) {
+      return res.status(404).json({ message: "Crew ticket not found." });
+    }
+    if (!(await ticketAccessibleByCaller(id, actorUserId, role))) {
+      return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+    }
+    if (ticket.status !== CrewTicketStatus.Approved) {
+      return res.status(409).json({ message: "Ticket is not approved." });
+    }
+
+    const updated = await updateCrewTicket(id, {
+      adminApprovalSeenAt: new Date(),
+    });
+    return res.status(200).json({
+      message: "Approval notification acknowledged.",
+      crewTicket: updated ? withTicketPdfAccess(updated) : null,
+    });
+  } catch (error) {
+    console.error("Error acknowledging approval notification:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
@@ -1622,6 +1801,66 @@ function isMarineFlight(flight: any): boolean {
     const name = String(fare?.name || "").toUpperCase();
     return indicator === "M" || type === "MARINE" || name.includes("MARINE");
   });
+}
+
+/** Classify inventory for ribbon + request vs pending-approval routing. */
+function resolveTicketInventory(flight: {
+  id?: string;
+  supplier?: string;
+  optimized?: boolean;
+  isMarineFare?: boolean;
+  fares?: unknown[];
+}): {
+  supplier: "riya" | "travelterminus" | "mixed";
+  isMarineFare: boolean;
+  inventoryKind: "marine" | "published" | "general" | "optimized";
+  requestFlow: boolean;
+  initialStatus: CrewTicketStatus;
+} {
+  const supplierRaw = resolveSupplierFromFlight(flight);
+  const supplier: "riya" | "travelterminus" | "mixed" =
+    supplierRaw === "mixed" || supplierRaw === "travelterminus" || supplierRaw === "riya"
+      ? supplierRaw
+      : "riya";
+  const optimized =
+    Boolean(flight.optimized) ||
+    supplier === "mixed" ||
+    (typeof flight.id === "string" && flight.id.startsWith("opt-"));
+  if (optimized) {
+    return {
+      supplier: "mixed",
+      isMarineFare: false,
+      inventoryKind: "optimized",
+      requestFlow: true,
+      initialStatus: CrewTicketStatus.Requested,
+    };
+  }
+  if (supplier === "travelterminus") {
+    return {
+      supplier: "travelterminus",
+      isMarineFare: false,
+      inventoryKind: "general",
+      requestFlow: true,
+      initialStatus: CrewTicketStatus.Requested,
+    };
+  }
+  const marine = isMarineFlight(flight);
+  if (marine) {
+    return {
+      supplier: "riya",
+      isMarineFare: true,
+      inventoryKind: "marine",
+      requestFlow: false,
+      initialStatus: CrewTicketStatus.Unapproved,
+    };
+  }
+  return {
+    supplier: "riya",
+    isMarineFare: false,
+    inventoryKind: "published",
+    requestFlow: true,
+    initialStatus: CrewTicketStatus.Requested,
+  };
 }
 
 /** Default product rank: shorter duration, then lower price. */
@@ -2390,6 +2629,495 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
     }
   } catch (error) {
     console.error("Error processing search request:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+}
+
+/** Dual-supplier one-way segment search with in-memory cache (shared with search-flights). */
+async function searchDualOneWaySegment(options: {
+  originCode: string;
+  destCode: string;
+  originLabel: string;
+  destLabel: string;
+  originCountry: string;
+  destCountry: string;
+  departureDate: string;
+  adults: number;
+  children: number;
+  infants: number;
+  cabinClass: string;
+  currency: string;
+  directOnly?: boolean;
+  endUserIP?: string;
+  endUserBrowserAgent?: string;
+  applyAdminLogic: (flights: any[]) => any[];
+}): Promise<any[]> {
+  const sector = options.originCountry === options.destCountry ? "D" : "I";
+  const emptyRiyaDate = "0001-01-01T00:00:00";
+  const formatRiyaDate = (date?: string) => (date ? `${date}T00:00:00` : emptyRiyaDate);
+  const cacheKey = buildFlightSearchCacheKey({
+    tripType: "one-way",
+    from: options.originCode,
+    to: options.destCode,
+    departureDate: options.departureDate,
+    adults: options.adults,
+    children: options.children,
+    infants: options.infants,
+    cabinClass: options.cabinClass,
+    currency: options.currency,
+    sector,
+    directOnly: Boolean(options.directOnly),
+    sortBy: "duration",
+    sortOrder: "asc",
+    filterDepartureTime: undefined,
+    departureTimeMode: "after",
+    filterArrivalDate: undefined,
+    filterArrivalTime: undefined,
+    arrivalTimeMode: "before",
+    searchDates: [options.departureDate],
+  });
+
+  const cached = getCachedFlightSearch(cacheKey);
+  if (cached) return cached;
+
+  const opts = {
+    adults: options.adults,
+    children: options.children,
+    infants: options.infants,
+    cabinClass: options.cabinClass,
+    currency: options.currency,
+    sector,
+    directOnly: Boolean(options.directOnly),
+  };
+
+  const ttSearchPromise = isTravelTerminusConfigured()
+    ? searchTravelTerminusFlights({
+        origin: options.originCode,
+        destination: options.destCode,
+        departureDate: options.departureDate,
+        adults: options.adults,
+        children: options.children,
+        infants: options.infants,
+        cabinClass: options.cabinClass,
+        currency: options.currency,
+        tripType: "one-way",
+        timeoutMs: 28_000,
+        endUserIP: options.endUserIP,
+        endUserBrowserAgent: options.endUserBrowserAgent,
+      }).catch((err) => {
+        console.error("[optimize-flights] TravelTerminus error:", err?.message || err);
+        return [] as any[];
+      })
+    : Promise.resolve([] as any[]);
+
+  const [riyaData, ttRaw] = await Promise.all([
+    fetchRiya(
+      buildPayload(
+        options.originCode,
+        options.destCode,
+        options.originLabel,
+        options.destLabel,
+        formatRiyaDate(options.departureDate),
+        options.originCountry,
+        options.destCountry,
+        opts
+      )
+    ),
+    ttSearchPromise,
+  ]);
+
+  const transformedData = tagSupplier(
+    transformRiyaResponse(riyaData || {}, options.originCode, options.destCode),
+    "riya"
+  );
+  const merged = options.applyAdminLogic([...transformedData, ...ttRaw]);
+  const flights = stripInternalFlightFields(sortFlights(merged, "duration", "asc"));
+  setCachedFlightSearch(cacheKey, flights);
+  return flights;
+}
+
+function shiftIsoDate(date: string, days: number): string {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function hubLabel(code: string): string {
+  return `${code} [${code}]`;
+}
+
+/**
+ * POST /crew-ticket/optimize-flights
+ * Stitch Riya + Travel Terminus segments into a short Pareto shortlist.
+ * One-way only (v1).
+ */
+export async function optimizeFlightsController(req: AuthenticatedRequest, res: Response) {
+  try {
+    const actorUserId = req.user?.userId;
+    const role = req.user?.role;
+    if (!actorUserId || !role) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
+
+    const body = req.body;
+    const {
+      tripType = "one-way",
+      from,
+      to,
+      departureDate,
+      adults = 1,
+      children = 0,
+      infants = 0,
+      cabinClass = "economy",
+      currency = "GBP",
+      project_id,
+      crew_ids,
+      minConnectionHours = OPTIMIZE_DEFAULTS.minConnectionHours,
+      maxHops = 2,
+      limit = OPTIMIZE_DEFAULTS.shortlist,
+    } = body;
+
+    if (tripType !== "one-way") {
+      return res.status(400).json({
+        error: "Optimized tickets are one-way only in v1. Use a one-way search.",
+      });
+    }
+    if (!from || !to || !departureDate) {
+      return res.status(400).json({ error: "from, to, and departureDate are required." });
+    }
+
+    const crewIdsArray = Array.isArray(crew_ids) ? crew_ids : [];
+    if (project_id) {
+      const projectAllowed = await projectOwnedByCaller(String(project_id), actorUserId, role);
+      if (!projectAllowed) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
+    }
+    for (const crewId of crewIdsArray) {
+      if (!(await crewOwnedByCaller(String(crewId), actorUserId, role))) {
+        return res.status(403).json({ message: ACCESS_DENIED_MESSAGE });
+      }
+    }
+
+    const [adminSettings, superAdmin] = await Promise.all([
+      getAdminSettings(),
+      findFirstSuperAdmin(),
+    ]);
+    const superAdminCashback = superAdmin?.cashback ?? null;
+    const adminForDebt = await findAdminById(actorUserId);
+    const installmentGbpForSearch = cancellationInstallmentGbp(
+      adminForDebt?.cancellationOutstanding ?? 0,
+      adminForDebt?.cancellationSlotsRemaining ?? 0
+    );
+
+    let rates: ExchangeRates;
+    try {
+      rates = await fetchRates();
+    } catch (error: unknown) {
+      console.error("Currency Fetch Error:", error);
+      return res.status(500).json({
+        error: `Currency Error: ${error instanceof Error ? error.message : "Could not fetch live rates"}`,
+      });
+    }
+
+    const applyAdminLogic = (flights: any[]) => {
+      const baseCurrency = adminSettings.baseCurrency || "GBP";
+      const requestedCurrency = currency as CurrencyCode;
+      const localCancellationSurcharge = cancellationInstallmentInCurrency(
+        installmentGbpForSearch,
+        requestedCurrency,
+        rates
+      );
+      const superAdminMarkupRaw = superAdmin?.markup ?? adminSettings.pricing.flatMarkup ?? 0;
+      const markupPercentageRaw =
+        superAdmin?.markupPercentage ?? adminSettings.pricing.percentageMarkup ?? 0;
+      const localSuperAdminMarkup = convert(
+        superAdminMarkupRaw,
+        baseCurrency as CurrencyCode,
+        requestedCurrency,
+        rates
+      );
+      const localFlatCashback =
+        superAdminCashback != null
+          ? convert(superAdminCashback, baseCurrency as CurrencyCode, requestedCurrency, rates)
+          : convert(
+              adminSettings.incentives.flatCashback || 0,
+              baseCurrency as CurrencyCode,
+              requestedCurrency,
+              rates
+            );
+
+      const airlineIncentivesMap = new Map<string, number>();
+      (adminSettings.incentives.airlineSpecific || []).forEach((a) => {
+        const airlines = a.airlines ?? (a.airline ? [a.airline] : []);
+        if (airlines.length > 0 && a.incentive) {
+          const localIncentive = convert(
+            a.incentive,
+            baseCurrency as CurrencyCode,
+            requestedCurrency,
+            rates
+          );
+          airlines.forEach((code: string) => airlineIncentivesMap.set(code.toUpperCase(), localIncentive));
+        }
+      });
+
+      return flights.map((flight) => {
+        const originalCurrency = (flight.originalCurrency || "INR") as CurrencyCode;
+        const airlineCode = (flight.airlineCode || "").toUpperCase();
+        const airlineIncentive = airlineIncentivesMap.get(airlineCode) ?? 0;
+        const updatedFares = (flight.fares || []).map((fare: any) => {
+          const riyaPriceConverted = convert(fare.totalFare, originalCurrency, requestedCurrency, rates);
+          const flatMarkup = localSuperAdminMarkup;
+          const percentageBase = riyaPriceConverted + flatMarkup;
+          const percentageMarkupAmount =
+            markupPercentageRaw > 0 ? (percentageBase * markupPercentageRaw) / 100 : 0;
+          const price = Math.round(
+            Math.max(
+              0,
+              riyaPriceConverted + flatMarkup + percentageMarkupAmount + localCancellationSurcharge
+            )
+          );
+          return {
+            ...fare,
+            price,
+            markup: Math.round(flatMarkup),
+            percentageMarkup: Math.round(percentageMarkupAmount),
+            totalFare: price,
+            cancellationSurcharge: Math.round(localCancellationSurcharge),
+          };
+        });
+        const cashback = airlineIncentive > 0 ? airlineIncentive : localFlatCashback;
+        const { fareBreakdown, ...flightWithoutFareBreakdown } = flight;
+        void fareBreakdown;
+        return {
+          ...flightWithoutFareBreakdown,
+          fares: updatedFares,
+          cashback: cashback > 0 ? cashback : null,
+          appliedIncentive: null,
+        };
+      });
+    };
+
+    const fromData = parseAirport(from);
+    const toData = parseAirport(to);
+    if (!fromData.code || !toData.code) {
+      return res.status(400).json({ error: "Could not parse origin/destination airport codes." });
+    }
+
+    const originCountry = from?.COUNTRY || "IN";
+    const destCountry = to?.COUNTRY || "IN";
+    const segmentBase = {
+      adults,
+      children,
+      infants,
+      cabinClass,
+      currency,
+      endUserIP: typeof req.ip === "string" ? req.ip : undefined,
+      endUserBrowserAgent: req.get("user-agent") || undefined,
+      applyAdminLogic,
+    };
+
+    const baselineFlights = await searchDualOneWaySegment({
+      ...segmentBase,
+      originCode: fromData.code,
+      destCode: toData.code,
+      originLabel: fromData.cityWithCode,
+      destLabel: toData.cityWithCode,
+      originCountry,
+      destCountry,
+      departureDate,
+      directOnly: false,
+    });
+
+    const baseline = computeBaseline(baselineFlights);
+    const hubs = selectOptimizeHubs({
+      origin: fromData.code,
+      destination: toData.code,
+      baselineFlights,
+      maxHubs: OPTIMIZE_DEFAULTS.maxHubs,
+    });
+
+    const depPlus1 = shiftIsoDate(departureDate, 1);
+    const depPlus2 = shiftIsoDate(departureDate, 2);
+    const isIntl = originCountry.toUpperCase() !== destCountry.toUpperCase();
+    const continuingDates = isIntl ? [departureDate, depPlus1, depPlus2] : [departureDate, depPlus1];
+
+    const segmentCache = new Map<string, Promise<any[]>>();
+    const getSegment = (
+      oCode: string,
+      dCode: string,
+      oLabel: string,
+      dLabel: string,
+      oCountry: string,
+      dCountry: string,
+      date: string,
+      preferDirect: boolean
+    ) => {
+      const key = `${oCode}|${dCode}|${date}|${preferDirect ? 1 : 0}|${oCountry}|${dCountry}`;
+      let p = segmentCache.get(key);
+      if (!p) {
+        p = searchDualOneWaySegment({
+          ...segmentBase,
+          originCode: oCode,
+          destCode: dCode,
+          originLabel: oLabel,
+          destLabel: dLabel,
+          originCountry: oCountry,
+          destCountry: dCountry,
+          departureDate: date,
+          directOnly: preferDirect,
+        });
+        segmentCache.set(key, p);
+      }
+      return p;
+    };
+
+    const loadInboundForHub = async (hub: string, preferDirect: boolean) => {
+      const hubCountry = hubCountryCode(hub, destCountry);
+      const batches = await Promise.all(
+        continuingDates.map((date) =>
+          getSegment(
+            hub,
+            toData.code,
+            hubLabel(hub),
+            toData.cityWithCode,
+            hubCountry,
+            destCountry,
+            date,
+            preferDirect
+          )
+        )
+      );
+      return batches.flat();
+    };
+
+    const loadOutboundForHub = async (hub: string, preferDirect: boolean) => {
+      const hubCountry = hubCountryCode(hub, originCountry);
+      return getSegment(
+        fromData.code,
+        hub,
+        fromData.cityWithCode,
+        hubLabel(hub),
+        originCountry,
+        hubCountry,
+        departureDate,
+        preferDirect
+      );
+    };
+
+    // Prefetch A→H and H→Z in parallel (correct hub countries + multi-day inbound for intl)
+    await Promise.all(
+      hubs.flatMap((hub) => [loadOutboundForHub(hub, true), loadInboundForHub(hub, true)])
+    );
+
+    const candidates: any[] = [];
+    for (const hub of hubs) {
+      let out = await loadOutboundForHub(hub, true);
+      if (out.length === 0) out = await loadOutboundForHub(hub, false);
+      let inn = await loadInboundForHub(hub, true);
+      if (inn.length === 0) inn = await loadInboundForHub(hub, false);
+      candidates.push(
+        ...stitchTwoHop({
+          origin: fromData.code,
+          destination: toData.code,
+          hub,
+          outbound: out,
+          inbound: inn,
+          minConnectionHours: Number(minConnectionHours) || 3,
+        })
+      );
+    }
+
+    if (Number(maxHops) >= 3 && hubs.length >= 2) {
+      const hubPairs: Array<[string, string]> = [];
+      for (let i = 0; i < hubs.length && hubPairs.length < 4; i++) {
+        for (let j = 0; j < hubs.length && hubPairs.length < 4; j++) {
+          if (i === j) continue;
+          hubPairs.push([hubs[i]!, hubs[j]!]);
+        }
+      }
+      for (const [h1, h2] of hubPairs) {
+        const h1Country = hubCountryCode(h1, originCountry);
+        const h2Country = hubCountryCode(h2, destCountry);
+        const leg1 = await getSegment(
+          fromData.code,
+          h1,
+          fromData.cityWithCode,
+          hubLabel(h1),
+          originCountry,
+          h1Country,
+          departureDate,
+          true
+        );
+        const leg2Batches = await Promise.all(
+          continuingDates.map((date) =>
+            getSegment(h1, h2, hubLabel(h1), hubLabel(h2), h1Country, h2Country, date, true)
+          )
+        );
+        const leg3Batches = await Promise.all(
+          continuingDates.map((date) =>
+            getSegment(
+              h2,
+              toData.code,
+              hubLabel(h2),
+              toData.cityWithCode,
+              h2Country,
+              destCountry,
+              date,
+              true
+            )
+          )
+        );
+        candidates.push(
+          ...stitchThreeHop({
+            origin: fromData.code,
+            destination: toData.code,
+            hub1: h1,
+            hub2: h2,
+            leg1,
+            leg2: leg2Batches.flat(),
+            leg3: leg3Batches.flat(),
+            minConnectionHours: Number(minConnectionHours) || 3,
+          })
+        );
+      }
+    }
+
+    const capped = filterByDurationCap(
+      candidates,
+      baseline.bestDurationMinutes,
+      originCountry,
+      destCountry
+    );
+    const shortlist = shortlistOptimized(capped, baseline, Math.min(Number(limit) || 8, 20));
+    const flights = await assignUnusedRandomTicketNumbers(stripInternalFlightFields(shortlist));
+
+    console.log(
+      `[optimize-flights] ${fromData.code}→${toData.code} hubs=${hubs.length} candidates=${candidates.length} capped=${capped.length} shortlist=${flights.length} gap=${minConnectionHours}h`
+    );
+
+    return res.json({
+      project_id,
+      crew_ids: crewIdsArray,
+      flights,
+      minConnectionHours: Number(minConnectionHours) || 3,
+      baseline: {
+        bestPrice: Number.isFinite(baseline.bestPrice) ? Math.round(baseline.bestPrice) : null,
+        bestDurationMinutes: Number.isFinite(baseline.bestDurationMinutes)
+          ? Math.round(baseline.bestDurationMinutes)
+          : null,
+      },
+      hubs,
+      pagination: {
+        page: 1,
+        limit: flights.length,
+        total: flights.length,
+        totalPages: 1,
+      },
+    });
+  } catch (error) {
+    console.error("Error processing optimize request:", error);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 }
