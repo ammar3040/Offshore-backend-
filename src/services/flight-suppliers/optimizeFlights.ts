@@ -61,10 +61,12 @@ export function hubCountryCode(iata: string, fallback = "IN"): string {
 }
 
 const DEFAULT_MIN_CONNECTION_HOURS = 3;
-/** Fewer hubs = fewer supplier round-trips (critical on Vercel time limits). */
-const DEFAULT_MAX_HUBS = 4;
-const DEFAULT_TOP_K_PER_SEGMENT = 4;
-const DEFAULT_SHORTLIST = 8;
+/** More hubs = more supplier crossings; capped so serverless limits still hold. */
+const DEFAULT_MAX_HUBS = 6;
+const DEFAULT_TOP_K_PER_SEGMENT = 6;
+/** Ensure at least this many stitched options are surfaced when candidates exist. */
+const DEFAULT_MIN_SHORTLIST = 5;
+const DEFAULT_SHORTLIST = 12;
 
 export function flightBestPrice(flight: any): number {
   const fares = Array.isArray(flight?.fares) ? flight.fares : [];
@@ -182,9 +184,21 @@ function legEndpoints(flight: any): { from: string; to: string; dep: number; arr
   return { from, to, dep, arr };
 }
 
-/** Prefer non-stop, then cheapest, then shortest — keep top K. */
-export function pickSegmentCandidates(flights: any[], topK = DEFAULT_TOP_K_PER_SEGMENT): any[] {
-  const scored = flights
+function segmentSupplierKey(flight: any): "travelterminus" | "riya" {
+  const raw = String(flight?.supplier ?? "").toLowerCase();
+  if (raw === "travelterminus" || raw === "travel_terminus" || raw === "tt") return "travelterminus";
+  if (typeof flight?.id === "string" && String(flight.id).startsWith("tt-")) return "travelterminus";
+  return "riya";
+}
+
+function scoreCandidates(flights: any[]): Array<{
+  flight: any;
+  ends: { from: string; to: string; dep: number; arr: number };
+  stops: number;
+  price: number;
+  duration: number;
+}> {
+  return flights
     .map((flight) => {
       const ends = legEndpoints(flight);
       if (!ends) return null;
@@ -204,14 +218,60 @@ export function pickSegmentCandidates(flights: any[], topK = DEFAULT_TOP_K_PER_S
     price: number;
     duration: number;
   }>;
+}
 
-  scored.sort((a, b) => {
+function rankScored(scored: ReturnType<typeof scoreCandidates>) {
+  return scored.sort((a, b) => {
     if (a.stops !== b.stops) return a.stops - b.stops;
     if (a.price !== b.price) return a.price - b.price;
     return a.duration - b.duration;
   });
+}
 
-  return scored.slice(0, topK).map((s) => s.flight);
+/**
+ * Pick a supplier-balanced pool so cross-supplier stitches (Riya + Travel Terminus)
+ * are always attempted, not squeezed out by whichever supplier is cheaper on that leg.
+ * Splits the pool per supplier, ranks each, then interleaves.
+ */
+export function pickSegmentCandidates(
+  flights: any[],
+  topK = DEFAULT_TOP_K_PER_SEGMENT
+): any[] {
+  const perSupplier = Math.max(2, Math.ceil(topK / 2));
+  const riya: any[] = [];
+  const tt: any[] = [];
+  for (const flight of flights) {
+    if (segmentSupplierKey(flight) === "travelterminus") tt.push(flight);
+    else riya.push(flight);
+  }
+  const rankedRiya = rankScored(scoreCandidates(riya)).slice(0, perSupplier);
+  const rankedTT = rankScored(scoreCandidates(tt)).slice(0, perSupplier);
+
+  const merged: any[] = [];
+  const seen = new Set<any>();
+  const push = (item?: { flight: any }) => {
+    if (!item || seen.has(item.flight)) return;
+    seen.add(item.flight);
+    merged.push(item.flight);
+  };
+  const max = Math.max(rankedRiya.length, rankedTT.length);
+  for (let i = 0; i < max; i++) {
+    push(rankedRiya[i]);
+    push(rankedTT[i]);
+  }
+
+  // If either supplier is empty, top up from the other so we still return topK candidates.
+  if (merged.length < topK) {
+    const extras = rankScored(scoreCandidates([...riya, ...tt]))
+      .map((s) => s.flight)
+      .filter((f) => !merged.includes(f));
+    for (const f of extras) {
+      if (merged.length >= topK) break;
+      merged.push(f);
+    }
+  }
+
+  return merged.slice(0, topK);
 }
 
 function formatGapHours(ms: number): string {
@@ -249,7 +309,7 @@ export function combineStitchedFlights(
   for (const seg of segments) {
     const segLegs = Array.isArray(seg?.legs) ? seg.legs : [];
     if (!segLegs.length) return null;
-    const supplier = seg.supplier === "travelterminus" ? "travelterminus" : "riya";
+    const supplier = segmentSupplierKey(seg);
     suppliers.add(supplier);
     for (const leg of segLegs) {
       legs.push({ ...leg, supplier });
@@ -322,13 +382,15 @@ export function stitchTwoHop(options: {
   outbound: any[];
   inbound: any[];
   minConnectionHours?: number;
+  topKPerSegment?: number;
 }): any[] {
   const minGapMs = (options.minConnectionHours ?? DEFAULT_MIN_CONNECTION_HOURS) * 3_600_000;
   const originU = options.origin.toUpperCase();
   const destU = options.destination.toUpperCase();
   const hubU = options.hub.toUpperCase();
-  const out = pickSegmentCandidates(options.outbound);
-  const inn = pickSegmentCandidates(options.inbound);
+  const topK = options.topKPerSegment ?? DEFAULT_TOP_K_PER_SEGMENT;
+  const out = pickSegmentCandidates(options.outbound, topK);
+  const inn = pickSegmentCandidates(options.inbound, topK);
   const results: any[] = [];
 
   for (const a of out) {
@@ -428,6 +490,18 @@ function flightKey(flight: any): string {
     .join("|");
 }
 
+function stitchSupplierMix(flight: any): "mixed" | "travelterminus" | "riya" {
+  const raw = String(flight?.supplier ?? "").toLowerCase();
+  if (raw === "mixed") return "mixed";
+  const legs = Array.isArray(flight?.legs) ? flight.legs : [];
+  const suppliers = new Set(
+    legs.map((l: any) => String(l?.supplier ?? "").toLowerCase()).filter(Boolean)
+  );
+  if (suppliers.has("travelterminus") && suppliers.has("riya")) return "mixed";
+  if (suppliers.has("travelterminus")) return "travelterminus";
+  return "riya";
+}
+
 /**
  * Shortlist diversity vs baseline:
  * always try to surface cheapest, fastest (even if pricier), and balanced mixes.
@@ -436,13 +510,23 @@ function flightKey(flight: any): string {
 export function shortlistOptimized(
   candidates: any[],
   baseline: { bestPrice: number; bestDurationMinutes: number },
-  limit = DEFAULT_SHORTLIST
+  limit = DEFAULT_SHORTLIST,
+  minCount = DEFAULT_MIN_SHORTLIST
 ): any[] {
   const basePrice = baseline.bestPrice;
   const baseDur = baseline.bestDurationMinutes;
   if (!candidates.length) return [];
 
-  const annotate = (f: any) => {
+  type Scored = {
+    f: any;
+    p: number;
+    d: number;
+    kind: OptimizationKind;
+    score: number;
+    mix: "mixed" | "travelterminus" | "riya";
+  };
+
+  const annotate = (f: any): Scored => {
     const p = flightBestPrice(f);
     const d = flightDurationMinutes(f);
     let kind: OptimizationKind = "balanced";
@@ -457,74 +541,37 @@ export function shortlistOptimized(
       Number.isFinite(basePrice) && basePrice > 0 && Number.isFinite(p) ? p / basePrice : 1;
     const normDur =
       Number.isFinite(baseDur) && baseDur > 0 && Number.isFinite(d) ? d / baseDur : 1;
-    return { f, p, d, kind, score: normPrice + normDur };
+    return { f, p, d, kind, score: normPrice + normDur, mix: stitchSupplierMix(f) };
   };
 
-  if (!Number.isFinite(basePrice) || !Number.isFinite(baseDur)) {
-    const scored = candidates
-      .map(annotate)
-      .filter((s) => Number.isFinite(s.p) && Number.isFinite(s.d))
-      .sort((a, b) => a.score - b.score);
-    const selected: typeof scored = [];
-    const used = new Set<string>();
-    const take = (item: (typeof scored)[0] | null) => {
-      if (!item) return;
-      const key = flightKey(item.f);
-      if (used.has(key)) return;
-      used.add(key);
-      selected.push(item);
-    };
-    // Cheapest + fastest even without baseline, then fill.
-    take([...scored].sort((a, b) => a.p - b.p || a.d - b.d)[0] ?? null);
-    take([...scored].sort((a, b) => a.d - b.d || a.p - b.p)[0] ?? null);
-    for (const s of scored) {
-      if (selected.length >= limit) break;
-      take(s);
-    }
-    return selected.slice(0, limit).map((s) => ({
+  const scoredAll = candidates
+    .map(annotate)
+    .filter((s) => Number.isFinite(s.p) && Number.isFinite(s.d));
+  if (!scoredAll.length) return [];
+
+  const finalize = (selected: Scored[]) =>
+    selected.slice(0, limit).map((s) => ({
       ...s.f,
       optimizationKind: s.kind,
-      baselineDelta: { price: 0, durationMinutes: 0 },
+      supplierMix: s.mix,
+      baselineDelta: {
+        price: Number.isFinite(basePrice) ? Math.round(s.p - basePrice) : 0,
+        durationMinutes: Number.isFinite(baseDur) ? Math.round(s.d - baseDur) : 0,
+      },
     }));
-  }
-
-  const durSlack = Math.max(baseDur * 1.85, baseDur + 20 * 60);
-  /** Allow noticeably faster options even when more expensive. */
-  const fastPriceSlack = basePrice * 2.0;
-  const cheapDurSlack = durSlack;
-
-  const viable = candidates.filter((f) => {
-    const p = flightBestPrice(f);
-    const d = flightDurationMinutes(f);
-    if (!Number.isFinite(p) || !Number.isFinite(d)) return false;
-    const cheaper = p < basePrice * 0.995;
-    const faster = d < baseDur * 0.995;
-    if (cheaper && faster) return true;
-    if (faster && p <= fastPriceSlack) return true;
-    if (cheaper && d <= cheapDurSlack) return true;
-    if (p <= basePrice * 1.4 && d <= durSlack && p / basePrice + d / baseDur < 2.1) return true;
-    return false;
-  });
-
-  const pool = (viable.length > 0 ? viable : candidates).filter((f) => {
-    const p = flightBestPrice(f);
-    const d = flightDurationMinutes(f);
-    return Number.isFinite(p) && Number.isFinite(d);
-  });
-
-  const scored = pool.map(annotate);
 
   const pickBest = (
-    pred: (s: (typeof scored)[0]) => boolean,
-    compare: (a: (typeof scored)[0], b: (typeof scored)[0]) => number
+    pool: Scored[],
+    pred: (s: Scored) => boolean,
+    compare: (a: Scored, b: Scored) => number
   ) => {
-    const matched = scored.filter(pred).sort(compare);
+    const matched = pool.filter(pred).sort(compare);
     return matched[0] ?? null;
   };
 
-  const selected: typeof scored = [];
+  const selected: Scored[] = [];
   const used = new Set<string>();
-  const take = (item: (typeof scored)[0] | null) => {
+  const take = (item: Scored | null) => {
     if (!item) return;
     const key = flightKey(item.f);
     if (used.has(key)) return;
@@ -532,56 +579,99 @@ export function shortlistOptimized(
     selected.push(item);
   };
 
-  // Showcase mix: cheapest, fastest (may be expensive), then niche winners.
-  take(pickBest(() => true, (a, b) => a.p - b.p || a.d - b.d));
-  take(
-    pickBest(
-      (s) => s.p <= fastPriceSlack,
-      (a, b) => a.d - b.d || a.p - b.p
-    )
-  );
-  take(
-    pickBest(
-      (s) => s.kind === "cheaper_faster",
-      (a, b) => a.score - b.score || a.p - b.p
-    )
-  );
-  take(
-    pickBest(
-      (s) => s.kind === "faster" && s.p <= fastPriceSlack,
-      (a, b) => a.d - b.d || a.p - b.p
-    )
-  );
-  take(
-    pickBest(
-      (s) => s.kind === "cheaper" && s.d <= cheapDurSlack,
-      (a, b) => a.p - b.p || a.d - b.d
-    )
-  );
-  take(
-    pickBest(
-      (s) => s.p <= basePrice * 1.15,
-      (a, b) => a.d - b.d || a.p - b.p
-    )
-  );
-  take(pickBest(() => true, (a, b) => a.score - b.score));
-
-  const rest = scored
-    .filter((s) => !used.has(flightKey(s.f)))
-    .sort((a, b) => a.score - b.score);
-  for (const s of rest) {
-    if (selected.length >= limit) break;
-    take(s);
+  // Fallback path when no baseline: still return a supplier-diverse mix of cheapest/fastest.
+  if (!Number.isFinite(basePrice) || !Number.isFinite(baseDur)) {
+    const pool = [...scoredAll].sort((a, b) => a.score - b.score);
+    take(pickBest(pool, () => true, (a, b) => a.p - b.p || a.d - b.d));
+    take(pickBest(pool, () => true, (a, b) => a.d - b.d || a.p - b.p));
+    take(pickBest(pool, (s) => s.mix === "mixed", (a, b) => a.score - b.score));
+    take(pickBest(pool, (s) => s.mix === "riya", (a, b) => a.score - b.score));
+    take(pickBest(pool, (s) => s.mix === "travelterminus", (a, b) => a.score - b.score));
+    for (const s of pool) {
+      if (selected.length >= limit) break;
+      take(s);
+    }
+    return finalize(selected);
   }
 
-  return selected.slice(0, limit).map((s) => ({
-    ...s.f,
-    optimizationKind: s.kind,
-    baselineDelta: {
-      price: Math.round(s.p - basePrice),
-      durationMinutes: Math.round(s.d - baseDur),
-    },
-  }));
+  const durSlack = Math.max(baseDur * 1.85, baseDur + 20 * 60);
+  /** Allow noticeably faster options even when more expensive. */
+  const fastPriceSlack = basePrice * 2.0;
+  const cheapDurSlack = durSlack;
+
+  const viable = scoredAll.filter((s) => {
+    const cheaper = s.p < basePrice * 0.995;
+    const faster = s.d < baseDur * 0.995;
+    if (cheaper && faster) return true;
+    if (faster && s.p <= fastPriceSlack) return true;
+    if (cheaper && s.d <= cheapDurSlack) return true;
+    if (s.p <= basePrice * 1.4 && s.d <= durSlack && s.p / basePrice + s.d / baseDur < 2.1) {
+      return true;
+    }
+    return false;
+  });
+
+  const pool = viable.length > 0 ? viable : scoredAll;
+
+  // 1) Guaranteed diversity picks: cheapest, fastest, and the best cross-supplier mix.
+  take(pickBest(pool, () => true, (a, b) => a.p - b.p || a.d - b.d));
+  take(pickBest(pool, (s) => s.p <= fastPriceSlack, (a, b) => a.d - b.d || a.p - b.p));
+  take(pickBest(pool, (s) => s.mix === "mixed", (a, b) => a.score - b.score || a.p - b.p));
+  take(pickBest(pool, (s) => s.mix === "mixed", (a, b) => a.p - b.p || a.d - b.d));
+  take(pickBest(pool, (s) => s.mix === "mixed", (a, b) => a.d - b.d || a.p - b.p));
+  take(pickBest(pool, (s) => s.kind === "cheaper_faster", (a, b) => a.score - b.score));
+  take(pickBest(pool, (s) => s.kind === "faster" && s.p <= fastPriceSlack, (a, b) => a.d - b.d));
+  take(pickBest(pool, (s) => s.kind === "cheaper" && s.d <= cheapDurSlack, (a, b) => a.p - b.p));
+  take(pickBest(pool, (s) => s.p <= basePrice * 1.15, (a, b) => a.d - b.d || a.p - b.p));
+
+  // 2) Fill the rest by best overall balance, alternating suppliers so single-supplier
+  //    results don't hog the shortlist when a cross-supplier stitch is also available.
+  const rest = pool
+    .filter((s) => !used.has(flightKey(s.f)))
+    .sort((a, b) => a.score - b.score);
+
+  const byMix: Record<"mixed" | "riya" | "travelterminus", Scored[]> = {
+    mixed: rest.filter((s) => s.mix === "mixed"),
+    riya: rest.filter((s) => s.mix === "riya"),
+    travelterminus: rest.filter((s) => s.mix === "travelterminus"),
+  };
+  const rotation: Array<"mixed" | "riya" | "travelterminus"> = ["mixed", "riya", "travelterminus"];
+  while (selected.length < limit) {
+    let added = false;
+    for (const key of rotation) {
+      const next = byMix[key].shift();
+      if (!next) continue;
+      take(next);
+      added = true;
+      if (selected.length >= limit) break;
+    }
+    if (!added) break;
+  }
+
+  // 3) Guarantee minCount by relaxing filters — pull straight from the full scored pool.
+  if (selected.length < Math.min(minCount, scoredAll.length)) {
+    const relaxed = [...scoredAll].sort((a, b) => a.score - b.score);
+    const relaxedByMix: Record<"mixed" | "riya" | "travelterminus", Scored[]> = {
+      mixed: relaxed.filter((s) => s.mix === "mixed" && !used.has(flightKey(s.f))),
+      riya: relaxed.filter((s) => s.mix === "riya" && !used.has(flightKey(s.f))),
+      travelterminus: relaxed.filter(
+        (s) => s.mix === "travelterminus" && !used.has(flightKey(s.f))
+      ),
+    };
+    while (selected.length < Math.min(minCount, scoredAll.length)) {
+      let added = false;
+      for (const key of rotation) {
+        const next = relaxedByMix[key].shift();
+        if (!next) continue;
+        take(next);
+        added = true;
+        if (selected.length >= minCount) break;
+      }
+      if (!added) break;
+    }
+  }
+
+  return finalize(selected);
 }
 
 export const OPTIMIZE_DEFAULTS = {
@@ -589,4 +679,5 @@ export const OPTIMIZE_DEFAULTS = {
   maxHubs: DEFAULT_MAX_HUBS,
   topK: DEFAULT_TOP_K_PER_SEGMENT,
   shortlist: DEFAULT_SHORTLIST,
+  minShortlist: DEFAULT_MIN_SHORTLIST,
 };

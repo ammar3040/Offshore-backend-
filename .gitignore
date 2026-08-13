@@ -1,5 +1,3 @@
-.env
-.env.staging
 /node_modules
 /dist
 /build
@@ -19,3 +17,4 @@
 # Git Backups
 .git-vishjit/
 .git.backup/
+config.bat

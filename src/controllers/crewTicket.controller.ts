@@ -2329,11 +2329,36 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
       parsedDate.setUTCDate(parsedDate.getUTCDate() + days);
       return parsedDate.toISOString().slice(0, 10);
     };
-    const departureSearchDates = departureDate
-      ? [departureDate]
-      : filterArrivalDate
-        ? [filterArrivalDate, shiftDate(filterArrivalDate, -1), shiftDate(filterArrivalDate, -2)]
-        : [];
+    /** Enumerate ISO YYYY-MM-DD dates inclusively between two anchors, capped for cost. */
+    const enumerateDateRange = (start: string, end: string, maxDays = 4): string[] => {
+      const startMs = new Date(`${start}T00:00:00Z`).getTime();
+      const endMs = new Date(`${end}T00:00:00Z`).getTime();
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+        return [start];
+      }
+      const span = Math.min(maxDays, Math.round((endMs - startMs) / 86_400_000) + 1);
+      const out: string[] = [];
+      for (let i = 0; i < span; i++) out.push(shiftDate(start, i));
+      return out;
+    };
+
+    // Widen the search window whenever we have any date hint so departure-only and
+    // arrival-only searches both return rich results (not just arrival-only).
+    let departureSearchDates: string[] = [];
+    if (departureDate && filterArrivalDate) {
+      // Both given → search every day in the range so long-haul / overnight flights are covered.
+      departureSearchDates = enumerateDateRange(departureDate, filterArrivalDate);
+    } else if (departureDate) {
+      // Departure only → include the next day too so late-night / redeye flights show up.
+      departureSearchDates = [departureDate, shiftDate(departureDate, 1)];
+    } else if (filterArrivalDate) {
+      // Arrival only → walk back so we catch departures that arrive on the target day.
+      departureSearchDates = [
+        filterArrivalDate,
+        shiftDate(filterArrivalDate, -1),
+        shiftDate(filterArrivalDate, -2),
+      ];
+    }
 
     const formattedDepDate = formatRiyaDate(departureSearchDates[0]);
     const formattedReturnDate =
@@ -2376,7 +2401,12 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
       ) {
         return false;
       }
-      if (filterArrivalDate && arr.date !== filterArrivalDate) return false;
+      // Departure date acts as a floor: never surface flights that leave before the
+      // user-selected departure day (matters when we search a widened date window).
+      if (departureDate && dep.date < departureDate) return false;
+      // Arrival date acts as a ceiling ("get me there by this day") instead of a strict
+      // equality so long-hauls / overnight connections aren't hidden.
+      if (filterArrivalDate && arr.date > filterArrivalDate) return false;
       if (
         filterArrivalTime &&
         !matchesTimeWithMode(arr.time, filterArrivalTime, arrivalTimeMode)
@@ -2571,24 +2601,37 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
 
       let flights = getCachedFlightSearch(cacheKey);
       if (!flights) {
+        // Match Travel Terminus to the same widened date window as Riya so both suppliers
+        // return results whenever the user filters by departure or arrival date.
+        const ttSearchDates = (
+          searchDates.filter((d): d is string => typeof d === "string" && d.length > 0)
+        );
+        const ttEffectiveDates = ttSearchDates.length > 0 ? ttSearchDates : [""];
         const ttSearchPromise = isTravelTerminusConfigured()
-          ? searchTravelTerminusFlights({
-              origin: fromData.code,
-              destination: toData.code,
-              departureDate: (departureSearchDates[0] || departureDate || "") as string,
-              adults,
-              children,
-              infants,
-              cabinClass,
-              currency,
-              tripType: "one-way",
-              timeoutMs: 28_000,
-              endUserIP: typeof req.ip === "string" ? req.ip : undefined,
-              endUserBrowserAgent: req.get("user-agent") || undefined,
-            }).catch((err) => {
-              console.error("[search-flights] TravelTerminus OW error:", err?.message || err);
-              return [] as any[];
-            })
+          ? Promise.all(
+              ttEffectiveDates.map((searchDate) =>
+                searchTravelTerminusFlights({
+                  origin: fromData.code,
+                  destination: toData.code,
+                  departureDate: searchDate || departureDate || "",
+                  adults,
+                  children,
+                  infants,
+                  cabinClass,
+                  currency,
+                  tripType: "one-way",
+                  timeoutMs: 28_000,
+                  endUserIP: typeof req.ip === "string" ? req.ip : undefined,
+                  endUserBrowserAgent: req.get("user-agent") || undefined,
+                }).catch((err) => {
+                  console.error(
+                    `[search-flights] TravelTerminus OW error (${searchDate}):`,
+                    err?.message || err
+                  );
+                  return [] as any[];
+                })
+              )
+            ).then((batches) => batches.flat())
           : Promise.resolve([] as any[]);
 
         const [dataSets, ttRaw] = await Promise.all([
@@ -2617,7 +2660,7 @@ export async function searchFlightsController(req: AuthenticatedRequest, res: Re
         );
         const mergedRaw = [...transformedData, ...ttRaw];
         console.log(
-          `[search-flights] OW suppliers: riya=${transformedData.length} travelterminus=${ttRaw.length}`
+          `[search-flights] OW suppliers: riya=${transformedData.length} travelterminus=${ttRaw.length} dates=${JSON.stringify(searchDates)}`
         );
         const merged = applyAdminLogic(mergedRaw).filter(matchesTimeFilters).filter(matchesDirectOnly);
         flights = stripInternalFlightFields(
@@ -3050,8 +3093,9 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
     );
     const candidates: any[] = perHub.flat();
 
-    // Skip expensive 3-hop unless we have almost nothing and caller asked for maxHops=3.
-    if (Number(maxHops) >= 3 && hubs.length >= 2 && candidates.length < 4) {
+    // Fall back to 3-hop stitching whenever 2-hop under-produces so we can guarantee
+    // at least a handful of optimized options to surface to the client.
+    if (Number(maxHops) >= 3 && hubs.length >= 2 && candidates.length < 6) {
       const hubPairs: Array<[string, string]> = [];
       for (let i = 0; i < hubs.length && hubPairs.length < 2; i++) {
         for (let j = 0; j < hubs.length && hubPairs.length < 2; j++) {
@@ -3113,7 +3157,19 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
       originCountry,
       destCountry
     );
-    const shortlist = shortlistOptimized(capped, baseline, Math.min(Number(limit) || 8, 20));
+    // Prefer the caller's requested limit but always try to surface at least 5 and up to 20.
+    const requestedLimit = Math.max(
+      OPTIMIZE_DEFAULTS.minShortlist,
+      Math.min(Number(limit) || OPTIMIZE_DEFAULTS.shortlist, 20)
+    );
+    // If the cap knocked everything out, fall back to raw candidates so we still return options.
+    const shortlistInput = capped.length > 0 ? capped : candidates;
+    const shortlist = shortlistOptimized(
+      shortlistInput,
+      baseline,
+      requestedLimit,
+      OPTIMIZE_DEFAULTS.minShortlist
+    );
     let flights: any[];
     try {
       flights = await assignUnusedRandomTicketNumbers(stripInternalFlightFields(shortlist));
@@ -3122,8 +3178,18 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
       flights = stripInternalFlightFields(shortlist);
     }
 
+    const mixCounts = shortlist.reduce(
+      (acc: Record<string, number>, f: any) => {
+        const key = String(f?.supplierMix ?? f?.supplier ?? "riya").toLowerCase();
+        acc[key] = (acc[key] ?? 0) + 1;
+        return acc;
+      },
+      {}
+    );
     console.log(
-      `[optimize-flights] ${fromData.code}→${toData.code} hubs=${hubs.length} candidates=${candidates.length} capped=${capped.length} shortlist=${flights.length} gap=${minConnectionHours}h`
+      `[optimize-flights] ${fromData.code}→${toData.code} hubs=${hubs.length} candidates=${candidates.length} capped=${capped.length} shortlist=${flights.length} mix=${JSON.stringify(
+        mixCounts
+      )} gap=${minConnectionHours}h`
     );
 
     return res.json({
