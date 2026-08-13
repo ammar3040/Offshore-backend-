@@ -9,6 +9,7 @@ import {
   loginCrew,
   patchCrew,
   postCrew,
+  postCrewCloudinarySign,
   resetCrewPassword,
   unassignCrewFromProject,
 } from "../controllers";
@@ -19,6 +20,7 @@ import {
   uploadCrewFilesToCloudinary,
   uploadCrewFilesToCloudinaryOptional,
 } from "../middleware/cloudinaryUpload";
+import { applyCrewDocumentUrlsFromBody } from "../middleware/crewDocumentUrls";
 import { projectIdParamSchema } from "../validations/crewInvite.validation";
 import {
   crewAndProjectParamsSchema,
@@ -38,17 +40,28 @@ router.get(
   getCrewAvailableForProject
 );
 router.get("/me", authenticateCrew, getCrewMe);
+router.post("/login", loginCrew);
+router.patch("/reset-password", authenticateCrew, resetCrewPassword);
+
+/** Signed params for browser → Cloudinary direct upload (avoids Vercel 4.5MB body limit / 413). */
+router.post("/cloudinary-sign", authenticateAdminOrSuperAdmin, postCrewCloudinarySign);
+
 router.get(
   "/:crew_id",
   authenticateAdminOrSuperAdmin,
   validate(crewIdParamSchema, "params"),
   getCrewById
 );
-router.post("/login", loginCrew);
-router.patch("/reset-password", authenticateCrew, resetCrewPassword);
 
 // create crew
-router.post("/", authenticateAdmin, crewUpload, uploadCrewFilesToCloudinary, postCrew);
+router.post(
+  "/",
+  authenticateAdmin,
+  crewUpload,
+  applyCrewDocumentUrlsFromBody,
+  uploadCrewFilesToCloudinary,
+  postCrew
+);
 
 // update crew (supports multipart/form-data like create, or JSON)
 router.patch(
@@ -56,6 +69,7 @@ router.patch(
   authenticateAdminOrSuperAdmin,
   validate(crewIdParamSchema, "params"),
   crewUpload,
+  applyCrewDocumentUrlsFromBody,
   uploadCrewFilesToCloudinaryOptional,
   patchCrew
 );

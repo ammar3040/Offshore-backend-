@@ -41,6 +41,7 @@ import { deleteTimesheetByCrewAndProject } from "../models/timesheet.model";
 import type { Crew } from "../models/crew.model";
 import { createAccessToken } from "../utils/jwt";
 import type { AuthenticatedRequest } from "../middleware/auth";
+import cloudinary, { CLOUDINARY_CREW_FOLDER } from "../config/cloudinary";
 import {
   ACCESS_DENIED_MESSAGE,
   crewOwnedByCaller,
@@ -1016,6 +1017,53 @@ export async function loginCrew(
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error("Error logging in crew:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+export async function postCrewCloudinarySign(
+  req: AuthenticatedRequest,
+  res: Response
+) {
+  try {
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
+    const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
+    const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
+    if (!cloudName || !apiKey || !apiSecret) {
+      return res.status(500).json({
+        message:
+          "Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.",
+      });
+    }
+
+    const kindRaw = String((req.body as { kind?: string })?.kind || "passport").toLowerCase();
+    const kind =
+      kindRaw === "identity" || kindRaw === "certificate" || kindRaw === "passport"
+        ? kindRaw
+        : null;
+    if (!kind) {
+      return res.status(400).json({
+        message: "kind must be one of: passport, identity, certificate",
+      });
+    }
+
+    const folder = `${CLOUDINARY_CREW_FOLDER}/${kind}`;
+    const timestamp = Math.round(Date.now() / 1000);
+    const signature = cloudinary.utils.api_sign_request(
+      { timestamp, folder },
+      apiSecret
+    );
+
+    return res.json({
+      cloudName,
+      apiKey,
+      timestamp,
+      signature,
+      folder,
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Error creating Cloudinary upload signature:", error);
     return res.status(500).json({ message: "Internal server error." });
   }
 }
