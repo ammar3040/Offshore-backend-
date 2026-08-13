@@ -61,8 +61,9 @@ export function hubCountryCode(iata: string, fallback = "IN"): string {
 }
 
 const DEFAULT_MIN_CONNECTION_HOURS = 3;
-const DEFAULT_MAX_HUBS = 6;
-const DEFAULT_TOP_K_PER_SEGMENT = 5;
+/** Fewer hubs = fewer supplier round-trips (critical on Vercel time limits). */
+const DEFAULT_MAX_HUBS = 4;
+const DEFAULT_TOP_K_PER_SEGMENT = 4;
 const DEFAULT_SHORTLIST = 8;
 
 export function flightBestPrice(flight: any): number {
@@ -428,9 +429,9 @@ function flightKey(flight: any): string {
 }
 
 /**
- * Shortlist diversity buckets vs baseline.
- * Keeps options that beat baseline on at least one axis without collapsing the other too badly.
- * If none pass the strict bar, falls back to the best scored capped candidates (still useful connections).
+ * Shortlist diversity vs baseline:
+ * always try to surface cheapest, fastest (even if pricier), and balanced mixes.
+ * If none pass the strict bar, falls back to best scored capped candidates.
  */
 export function shortlistOptimized(
   candidates: any[],
@@ -440,29 +441,57 @@ export function shortlistOptimized(
   const basePrice = baseline.bestPrice;
   const baseDur = baseline.bestDurationMinutes;
   if (!candidates.length) return [];
+
+  const annotate = (f: any) => {
+    const p = flightBestPrice(f);
+    const d = flightDurationMinutes(f);
+    let kind: OptimizationKind = "balanced";
+    if (Number.isFinite(basePrice) && Number.isFinite(baseDur)) {
+      const cheaper = p < basePrice * 0.995;
+      const faster = d < baseDur * 0.995;
+      if (cheaper && faster) kind = "cheaper_faster";
+      else if (faster) kind = "faster";
+      else if (cheaper) kind = "cheaper";
+    }
+    const normPrice =
+      Number.isFinite(basePrice) && basePrice > 0 && Number.isFinite(p) ? p / basePrice : 1;
+    const normDur =
+      Number.isFinite(baseDur) && baseDur > 0 && Number.isFinite(d) ? d / baseDur : 1;
+    return { f, p, d, kind, score: normPrice + normDur };
+  };
+
   if (!Number.isFinite(basePrice) || !Number.isFinite(baseDur)) {
-    // No usable A→Z baseline — still return a few cheapest/shortest stitches.
-    return candidates
-      .map((f) => ({
-        f,
-        p: flightBestPrice(f),
-        d: flightDurationMinutes(f),
-        score:
-          (Number.isFinite(flightBestPrice(f)) ? flightBestPrice(f) : 1e9) / 1000 +
-          (Number.isFinite(flightDurationMinutes(f)) ? flightDurationMinutes(f) : 1e9) / 60,
-      }))
+    const scored = candidates
+      .map(annotate)
       .filter((s) => Number.isFinite(s.p) && Number.isFinite(s.d))
-      .sort((a, b) => a.score - b.score)
-      .slice(0, limit)
-      .map((s) => ({
-        ...s.f,
-        optimizationKind: "balanced" as OptimizationKind,
-        baselineDelta: { price: 0, durationMinutes: 0 },
-      }));
+      .sort((a, b) => a.score - b.score);
+    const selected: typeof scored = [];
+    const used = new Set<string>();
+    const take = (item: (typeof scored)[0] | null) => {
+      if (!item) return;
+      const key = flightKey(item.f);
+      if (used.has(key)) return;
+      used.add(key);
+      selected.push(item);
+    };
+    // Cheapest + fastest even without baseline, then fill.
+    take([...scored].sort((a, b) => a.p - b.p || a.d - b.d)[0] ?? null);
+    take([...scored].sort((a, b) => a.d - b.d || a.p - b.p)[0] ?? null);
+    for (const s of scored) {
+      if (selected.length >= limit) break;
+      take(s);
+    }
+    return selected.slice(0, limit).map((s) => ({
+      ...s.f,
+      optimizationKind: s.kind,
+      baselineDelta: { price: 0, durationMinutes: 0 },
+    }));
   }
 
-  const durSlack = Math.max(baseDur * 1.75, baseDur + 18 * 60);
-  const priceSlack = basePrice * 1.35;
+  const durSlack = Math.max(baseDur * 1.85, baseDur + 20 * 60);
+  /** Allow noticeably faster options even when more expensive. */
+  const fastPriceSlack = basePrice * 2.0;
+  const cheapDurSlack = durSlack;
 
   const viable = candidates.filter((f) => {
     const p = flightBestPrice(f);
@@ -470,13 +499,10 @@ export function shortlistOptimized(
     if (!Number.isFinite(p) || !Number.isFinite(d)) return false;
     const cheaper = p < basePrice * 0.995;
     const faster = d < baseDur * 0.995;
-    const notMuchWorsePrice = p <= priceSlack;
-    const notMuchWorseDur = d <= durSlack;
     if (cheaper && faster) return true;
-    if (faster && notMuchWorsePrice) return true;
-    if (cheaper && notMuchWorseDur) return true;
-    // Near-parity options that improve normalized score
-    if (notMuchWorsePrice && notMuchWorseDur && p / basePrice + d / baseDur < 1.85) return true;
+    if (faster && p <= fastPriceSlack) return true;
+    if (cheaper && d <= cheapDurSlack) return true;
+    if (p <= basePrice * 1.4 && d <= durSlack && p / basePrice + d / baseDur < 2.1) return true;
     return false;
   });
 
@@ -486,19 +512,7 @@ export function shortlistOptimized(
     return Number.isFinite(p) && Number.isFinite(d);
   });
 
-  const scored = pool.map((f) => {
-    const p = flightBestPrice(f);
-    const d = flightDurationMinutes(f);
-    const cheaper = p < basePrice;
-    const faster = d < baseDur;
-    let kind: OptimizationKind = "balanced";
-    if (cheaper && faster) kind = "cheaper_faster";
-    else if (faster) kind = "faster";
-    else if (cheaper) kind = "cheaper";
-    const normPrice = p / basePrice;
-    const normDur = d / baseDur;
-    return { f, p, d, kind, score: normPrice + normDur };
-  });
+  const scored = pool.map(annotate);
 
   const pickBest = (
     pred: (s: (typeof scored)[0]) => boolean,
@@ -518,6 +532,14 @@ export function shortlistOptimized(
     selected.push(item);
   };
 
+  // Showcase mix: cheapest, fastest (may be expensive), then niche winners.
+  take(pickBest(() => true, (a, b) => a.p - b.p || a.d - b.d));
+  take(
+    pickBest(
+      (s) => s.p <= fastPriceSlack,
+      (a, b) => a.d - b.d || a.p - b.p
+    )
+  );
   take(
     pickBest(
       (s) => s.kind === "cheaper_faster",
@@ -526,14 +548,20 @@ export function shortlistOptimized(
   );
   take(
     pickBest(
-      (s) => s.kind === "faster" && s.p <= basePrice * 1.35,
+      (s) => s.kind === "faster" && s.p <= fastPriceSlack,
       (a, b) => a.d - b.d || a.p - b.p
     )
   );
   take(
     pickBest(
-      (s) => s.kind === "cheaper" && s.d <= durSlack,
+      (s) => s.kind === "cheaper" && s.d <= cheapDurSlack,
       (a, b) => a.p - b.p || a.d - b.d
+    )
+  );
+  take(
+    pickBest(
+      (s) => s.p <= basePrice * 1.15,
+      (a, b) => a.d - b.d || a.p - b.p
     )
   );
   take(pickBest(() => true, (a, b) => a.score - b.score));

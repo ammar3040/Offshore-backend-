@@ -729,7 +729,13 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       firstItin?.from ||
       (firstLeg as { from?: string } | undefined)?.from ||
       "";
-    const from = parseAirportFromString(firstItin?.fromAirport || "", fromIata);
+    const fromAirportRaw =
+      firstItin?.fromAirport ||
+      (typeof firstLeg?.from === "string" && firstLeg.from.includes("[")
+        ? firstLeg.from
+        : "") ||
+      "";
+    const from = parseAirportFromString(fromAirportRaw || fromIata, fromIata);
 
     /** Combined outbound+return from search uses id prefix `rt-`; do not infer RT from connection segment count. */
     const isRoundTripBundle =
@@ -744,10 +750,14 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
       const lastLeg = fl.legs[fl.legs.length - 1] as typeof firstLeg;
       const lastItins = lastLeg?.itinerary ?? [];
       const lastItin = lastItins[lastItins.length - 1];
-      toAirportRaw = lastItin?.toAirport ?? firstItin?.toAirport ?? "";
-      toIata = lastItin?.to ?? firstItin?.to ?? lastLeg?.to ?? "";
+      toAirportRaw =
+        lastItin?.toAirport ||
+        firstItin?.toAirport ||
+        (typeof lastLeg?.to === "string" && lastLeg.to.includes("[") ? lastLeg.to : "") ||
+        "";
+      toIata = lastItin?.to || firstItin?.to || lastLeg?.to || "";
     }
-    const to = parseAirportFromString(toAirportRaw, toIata);
+    const to = parseAirportFromString(toAirportRaw || toIata, toIata);
     const cabinClass = cabinToClass(fl.fares?.[0]?.cabin || "");
     const legCount = fl.legs?.length ?? 1;
     const trip = isRoundTripBundle ? TripType.RoundTrip : TripType.OneWay;
@@ -928,8 +938,10 @@ export async function bookFlight(req: AuthenticatedRequest, res: Response) {
   } catch (error) {
     console.error("Error booking flight:", error);
     const message =
-      error instanceof Error && error.name === "ValidationError"
-        ? error.message
+      error instanceof Error
+        ? error.name === "ValidationError"
+          ? error.message
+          : error.message || "Internal server error."
         : "Internal server error.";
     return res.status(500).json({
       message,
@@ -1905,7 +1917,7 @@ function sortFlights(flights: any[], sortBy?: FlightSortBy, sortOrder: FlightSor
     .map(({ flight }) => flight);
 }
 
-async function fetchRiya(payload: any) {
+async function fetchRiya(payload: any, timeoutMs = 45_000) {
   const response = await fetch(RIYA_URL, {
     method: "POST",
     headers: {
@@ -1920,7 +1932,7 @@ async function fetchRiya(payload: any) {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1",
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(45_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) return null;
   return response.json();
@@ -2651,6 +2663,9 @@ async function searchDualOneWaySegment(options: {
   endUserIP?: string;
   endUserBrowserAgent?: string;
   applyAdminLogic: (flights: any[]) => any[];
+  /** Faster timeouts for optimize path (ms). */
+  riyaTimeoutMs?: number;
+  ttTimeoutMs?: number;
 }): Promise<any[]> {
   const sector = options.originCountry === options.destCountry ? "D" : "I";
   const emptyRiyaDate = "0001-01-01T00:00:00";
@@ -2690,6 +2705,9 @@ async function searchDualOneWaySegment(options: {
     directOnly: Boolean(options.directOnly),
   };
 
+  const ttTimeoutMs = options.ttTimeoutMs ?? 28_000;
+  const riyaTimeoutMs = options.riyaTimeoutMs ?? 45_000;
+
   const ttSearchPromise = isTravelTerminusConfigured()
     ? searchTravelTerminusFlights({
         origin: options.originCode,
@@ -2701,7 +2719,7 @@ async function searchDualOneWaySegment(options: {
         cabinClass: options.cabinClass,
         currency: options.currency,
         tripType: "one-way",
-        timeoutMs: 28_000,
+        timeoutMs: ttTimeoutMs,
         endUserIP: options.endUserIP,
         endUserBrowserAgent: options.endUserBrowserAgent,
       }).catch((err) => {
@@ -2721,8 +2739,15 @@ async function searchDualOneWaySegment(options: {
         options.originCountry,
         options.destCountry,
         opts
-      )
-    ),
+      ),
+      riyaTimeoutMs
+    ).catch((err) => {
+      console.error(
+        `[segment-search] Riya error ${options.originCode}→${options.destCode}:`,
+        err?.message || err
+      );
+      return null;
+    }),
     ttSearchPromise,
   ]);
 
@@ -2907,6 +2932,9 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
 
     const originCountry = from?.COUNTRY || "IN";
     const destCountry = to?.COUNTRY || "IN";
+    /** Aggressive timeouts so optimize finishes inside serverless limits. */
+    const OPT_RIYA_MS = 18_000;
+    const OPT_TT_MS = 12_000;
     const segmentBase = {
       adults,
       children,
@@ -2916,6 +2944,8 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
       endUserIP: typeof req.ip === "string" ? req.ip : undefined,
       endUserBrowserAgent: req.get("user-agent") || undefined,
       applyAdminLogic,
+      riyaTimeoutMs: OPT_RIYA_MS,
+      ttTimeoutMs: OPT_TT_MS,
     };
 
     const baselineFlights = await searchDualOneWaySegment({
@@ -2939,9 +2969,9 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
     });
 
     const depPlus1 = shiftIsoDate(departureDate, 1);
-    const depPlus2 = shiftIsoDate(departureDate, 2);
     const isIntl = originCountry.toUpperCase() !== destCountry.toUpperCase();
-    const continuingDates = isIntl ? [departureDate, depPlus1, depPlus2] : [departureDate, depPlus1];
+    // One continuing day for domestic; +1 for intl overnight connections (keep lean for speed).
+    const continuingDates = isIntl ? [departureDate, depPlus1] : [departureDate];
 
     const segmentCache = new Map<string, Promise<any[]>>();
     const getSegment = (
@@ -2951,10 +2981,9 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
       dLabel: string,
       oCountry: string,
       dCountry: string,
-      date: string,
-      preferDirect: boolean
+      date: string
     ) => {
-      const key = `${oCode}|${dCode}|${date}|${preferDirect ? 1 : 0}|${oCountry}|${dCountry}`;
+      const key = `${oCode}|${dCode}|${date}|0|${oCountry}|${dCountry}`;
       let p = segmentCache.get(key);
       if (!p) {
         p = searchDualOneWaySegment({
@@ -2966,14 +2995,15 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
           originCountry: oCountry,
           destCountry: dCountry,
           departureDate: date,
-          directOnly: preferDirect,
+          // Single pass (direct + connecting) — avoids a second supplier round-trip per hub.
+          directOnly: false,
         });
         segmentCache.set(key, p);
       }
       return p;
     };
 
-    const loadInboundForHub = async (hub: string, preferDirect: boolean) => {
+    const loadInboundForHub = async (hub: string) => {
       const hubCountry = hubCountryCode(hub, destCountry);
       const batches = await Promise.all(
         continuingDates.map((date) =>
@@ -2984,15 +3014,14 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
             toData.cityWithCode,
             hubCountry,
             destCountry,
-            date,
-            preferDirect
+            date
           )
         )
       );
       return batches.flat();
     };
 
-    const loadOutboundForHub = async (hub: string, preferDirect: boolean) => {
+    const loadOutboundForHub = async (hub: string) => {
       const hubCountry = hubCountryCode(hub, originCountry);
       return getSegment(
         fromData.code,
@@ -3001,76 +3030,69 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
         hubLabel(hub),
         originCountry,
         hubCountry,
-        departureDate,
-        preferDirect
+        departureDate
       );
     };
 
-    // Prefetch A→H and H→Z in parallel (correct hub countries + multi-day inbound for intl)
-    await Promise.all(
-      hubs.flatMap((hub) => [loadOutboundForHub(hub, true), loadInboundForHub(hub, true)])
-    );
-
-    const candidates: any[] = [];
-    for (const hub of hubs) {
-      let out = await loadOutboundForHub(hub, true);
-      if (out.length === 0) out = await loadOutboundForHub(hub, false);
-      let inn = await loadInboundForHub(hub, true);
-      if (inn.length === 0) inn = await loadInboundForHub(hub, false);
-      candidates.push(
-        ...stitchTwoHop({
+    // Prefetch + stitch all hubs in parallel (no sequential true→false retries).
+    const perHub = await Promise.all(
+      hubs.map(async (hub) => {
+        const [out, inn] = await Promise.all([loadOutboundForHub(hub), loadInboundForHub(hub)]);
+        return stitchTwoHop({
           origin: fromData.code,
           destination: toData.code,
           hub,
           outbound: out,
           inbound: inn,
           minConnectionHours: Number(minConnectionHours) || 3,
-        })
-      );
-    }
+        });
+      })
+    );
+    const candidates: any[] = perHub.flat();
 
-    if (Number(maxHops) >= 3 && hubs.length >= 2) {
+    // Skip expensive 3-hop unless we have almost nothing and caller asked for maxHops=3.
+    if (Number(maxHops) >= 3 && hubs.length >= 2 && candidates.length < 4) {
       const hubPairs: Array<[string, string]> = [];
-      for (let i = 0; i < hubs.length && hubPairs.length < 4; i++) {
-        for (let j = 0; j < hubs.length && hubPairs.length < 4; j++) {
+      for (let i = 0; i < hubs.length && hubPairs.length < 2; i++) {
+        for (let j = 0; j < hubs.length && hubPairs.length < 2; j++) {
           if (i === j) continue;
           hubPairs.push([hubs[i]!, hubs[j]!]);
         }
       }
-      for (const [h1, h2] of hubPairs) {
-        const h1Country = hubCountryCode(h1, originCountry);
-        const h2Country = hubCountryCode(h2, destCountry);
-        const leg1 = await getSegment(
-          fromData.code,
-          h1,
-          fromData.cityWithCode,
-          hubLabel(h1),
-          originCountry,
-          h1Country,
-          departureDate,
-          true
-        );
-        const leg2Batches = await Promise.all(
-          continuingDates.map((date) =>
-            getSegment(h1, h2, hubLabel(h1), hubLabel(h2), h1Country, h2Country, date, true)
-          )
-        );
-        const leg3Batches = await Promise.all(
-          continuingDates.map((date) =>
+      const threeHopBatches = await Promise.all(
+        hubPairs.map(async ([h1, h2]) => {
+          const h1Country = hubCountryCode(h1, originCountry);
+          const h2Country = hubCountryCode(h2, destCountry);
+          const [leg1, leg2Batches, leg3Batches] = await Promise.all([
             getSegment(
-              h2,
-              toData.code,
-              hubLabel(h2),
-              toData.cityWithCode,
-              h2Country,
-              destCountry,
-              date,
-              true
-            )
-          )
-        );
-        candidates.push(
-          ...stitchThreeHop({
+              fromData.code,
+              h1,
+              fromData.cityWithCode,
+              hubLabel(h1),
+              originCountry,
+              h1Country,
+              departureDate
+            ),
+            Promise.all(
+              continuingDates.map((date) =>
+                getSegment(h1, h2, hubLabel(h1), hubLabel(h2), h1Country, h2Country, date)
+              )
+            ),
+            Promise.all(
+              continuingDates.map((date) =>
+                getSegment(
+                  h2,
+                  toData.code,
+                  hubLabel(h2),
+                  toData.cityWithCode,
+                  h2Country,
+                  destCountry,
+                  date
+                )
+              )
+            ),
+          ]);
+          return stitchThreeHop({
             origin: fromData.code,
             destination: toData.code,
             hub1: h1,
@@ -3079,9 +3101,10 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
             leg2: leg2Batches.flat(),
             leg3: leg3Batches.flat(),
             minConnectionHours: Number(minConnectionHours) || 3,
-          })
-        );
-      }
+          });
+        })
+      );
+      candidates.push(...threeHopBatches.flat());
     }
 
     const capped = filterByDurationCap(
@@ -3091,7 +3114,13 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
       destCountry
     );
     const shortlist = shortlistOptimized(capped, baseline, Math.min(Number(limit) || 8, 20));
-    const flights = await assignUnusedRandomTicketNumbers(stripInternalFlightFields(shortlist));
+    let flights: any[];
+    try {
+      flights = await assignUnusedRandomTicketNumbers(stripInternalFlightFields(shortlist));
+    } catch (ticketErr) {
+      console.error("[optimize-flights] ticket number assign failed:", ticketErr);
+      flights = stripInternalFlightFields(shortlist);
+    }
 
     console.log(
       `[optimize-flights] ${fromData.code}→${toData.code} hubs=${hubs.length} candidates=${candidates.length} capped=${capped.length} shortlist=${flights.length} gap=${minConnectionHours}h`
@@ -3118,7 +3147,10 @@ export async function optimizeFlightsController(req: AuthenticatedRequest, res: 
     });
   } catch (error) {
     console.error("Error processing optimize request:", error);
-    return res.status(500).json({ error: "Internal Server Error" });
+    return res.status(500).json({
+      error: "Internal Server Error",
+      message: error instanceof Error ? error.message : "Optimize failed",
+    });
   }
 }
 
